@@ -9,7 +9,8 @@ every number comes from a test run, and anything that could not be tested is lis
   (LaunchAgents, Jarvis Voice with its TCC grants), plus the full test suites. The machine was
   under load during the measurements (local LLM server ≈ 47 % CPU, load average ≈ 7.7), which
   slows the voice engine.
-- **GitHub Actions** (`.github/workflows/ci.yml`, Node 22), on GitHub-hosted runners:
+- **GitHub Actions** (`.github/workflows/ci.yml`, Node 22) — the numbers below are from run
+  [42195412527](https://github.com/yaswanth3007/jarvis/actions/runs/42195412527) (commit `e6350ba`), green on all six jobs — on GitHub-hosted runners:
   `macos-26` (arm64), `macos-26-intel` (x64), `windows-2025` (x64), `windows-11-arm` (ARM64),
   `ubuntu-24.04` (x64), `ubuntu-24.04-arm` (ARM64). Linux jobs run in a headless desktop session
   (Xvfb, D-Bus, AT-SPI, Openbox, PulseAudio with a virtual sink); Windows jobs use the runner's
@@ -22,16 +23,27 @@ every number comes from a test run, and anything that could not be tested is lis
 |---|---|---|---|---|---|---|
 | Install dependencies, native binaries | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Speech models downloaded and SHA-256 verified | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| JS test suite (`npm test`) | ✓ | ✓ | ✓ | WINDOWS_ARM64_TESTS | ✓ | ✓ |
+| JS test suite (`npm test`): passed / skipped (of 67) | 54 / 13 | 54 / 13 | 65 / 2 | 65 / 2 | 65 / 2 | 65 / 2 |
 | Swift tests (82, shared vectors) and app build | ✓ | ✓ | — | — | — | — |
 | Wake word + transcription on recordings | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Real desktop end to end (open, read, click/type, keys, screenshot, close) | real Mac ✓ | — | ✓ Notepad (UI Automation) | WINDOWS_ARM64_DESKTOP | ✓ GTK app (AT-SPI, X11) | ✓ GTK app (AT-SPI, X11) |
+| Real desktop end to end (open, read, click/type, keys, screenshot, close) | open/close only ⁴ | — | ✓ Notepad (UI Automation) | ✓ Notepad ³ | ✓ GTK app (AT-SPI, X11) | ✓ GTK app (AT-SPI, X11) |
 | Live sound: player → sound server → microphone → wake word | — | — | — (no audio device) | — (no audio device) | ✓ | ✓ |
 | Voice engine (Kokoro) speaks, with proofs | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Voice assistant end to end against a bridge (signed, permission question, desktop action, quit) | real Mac ✓ | n/a | ✓ | WINDOWS_ARM64_CLIENT | ✓ | ✓ |
-| Package built (runtime-only) + smoke test of the package | ✓ | ✓ | ✓ zip + setup.exe | WINDOWS_ARM64_PACKAGE | ✓ tar.gz + .deb | ✓ tar.gz + .deb |
+| Voice assistant end to end against a bridge (signed, permission question, desktop action, quit) | real Mac ✓ | n/a | ✓ | ✓ | ✓ | ✓ |
+| Package built (runtime-only) + smoke test of the package | ✓ | ✓ | ✓ zip + setup.exe | ✓ zip + setup.exe | ✓ tar.gz + .deb | ✓ tar.gz + .deb |
 | .deb installed and run | — | — | — | — | ✓ | ✓ |
-| Installed as a user would, login service started, uninstalled | ✓ launchd | ✓ launchd | ✓ Run entry + keepalive | WINDOWS_ARM64_INSTALL | ✓ systemd --user | ✓ systemd --user |
+| Installed as a user would, login service started, uninstalled | ✓ launchd | ✓ launchd | ✓ Run entry + keepalive | ✓ Run entry + keepalive | ✓ systemd --user | ✓ systemd --user |
+
+³ On the Windows 11 ARM64 runner a "Microsoft account" sign-in window stayed in front, so Windows
+did not let Jarvis bring Notepad forward: Jarvis typed the text into Notepad through UI
+Automation instead, and refused to press keys, naming the window in front — the designed
+behaviour, never a key press into another window. Key presses themselves were verified on
+Windows x64. JS skips are the other platforms' suites (the Node voice assistant does not run on
+macOS, where Jarvis Voice is native).
+
+⁴ On this Mac (managed by an MDM profile that blocks Accessibility, with Screen Recording not
+granted by macOS) only opening and closing apps could be exercised; reading and operating other
+apps' windows on macOS is not verified here. macOS x64 has no real-desktop test (CI runner only).
 
 On this Mac, after reinstalling with the new shared core (`macos/jarvisctl install`): all services
 running from `core/supervisor.mjs`, Jarvis Voice reconnected and verified the bridge, and typed
@@ -48,12 +60,12 @@ the real listener (keyword spotter + VAD + Moonshine):
 | | real-time factor (median) | transcription per utterance, median / p95 | models load |
 |---|---|---|---|
 | This Mac (arm64) | 0.028–0.040 | 32–54 ms / 50–73 ms | 0.7–0.8 s |
-| macOS arm64 runner | 0.030 | 38 / 51 ms | 1.9 s |
-| macOS x64 runner | 0.099 | 144 / 304 ms | 6.2 s |
-| Windows x64 runner | 0.022–0.046 | 28–61 / 39–78 ms | 1.0–1.8 s |
-| Windows ARM64 runner | 0.050–0.052 | 52–60 / 82–86 ms | 1.3–1.4 s |
-| Linux x64 runner | 0.037 | 49 / 70 ms | 1.0 s |
-| Linux ARM64 runner | 0.045 | 56 / 81 ms | 1.1 s |
+| macOS arm64 runner | 0.042 | 56 / 88 ms | 3.3 s |
+| macOS x64 runner | 0.053 | 76 / 105 ms | 3.6 s |
+| Windows x64 runner | 0.022 | 30 / 38 ms | 1.0 s |
+| Windows ARM64 runner | 0.051 | 58 / 81 ms | 1.3 s |
+| Linux x64 runner | 0.032 | 43 / 76 ms | 1.0 s |
+| Linux ARM64 runner | 0.045 | 57 / 80 ms | 1.1 s |
 
 Every run: all 7 wake-phrase recordings woke Jarvis, none of the 3 other sentences did, and the
 requests were transcribed exactly ("what time is it?", "stop task 2.", "open the calculator.").
@@ -65,20 +77,25 @@ Through the Linux sound server (player → virtual sink → microphone) the requ
 
 | | open | read window | click | type | keys | screenshot | close |
 |---|---|---|---|---|---|---|---|
-| Windows x64 (Notepad) | 3624 | 103 | — | 671 | 228 | 162 | 6049 ¹ |
-| Linux x64 (GTK app) | 73 | 57 | 60 | 58 | 162 | 26 | 314 |
-| Linux ARM64 (GTK app) | 90 | 52 | 51 | 50 | 159 | 14 | 312 |
+| Windows x64 (Notepad) | 630 | 184 | — | 572 | 208 | 136 | 6034 ¹ |
+| Windows ARM64 (Notepad) | 6046 | 516 | — | 519 ³ | refused ³ | 394 | 328 |
+| Linux x64 (GTK app) | 40 | 45 | 45 | 46 | 170 | 15 | 313 |
+| Linux ARM64 (GTK app) | 73 | 52 | 53 | 53 | 160 | 15 | 311 |
 
 ¹ Notepad had unsaved text, so it asked about it; Jarvis waited, then reported honestly that it was
-still open. The Windows helper answers in 0.3–0.9 ms per call once started (first start 0.3–7.6 s).
+still open. The Windows helper answers in 0.3–0.9 ms per call once started (first start
+0.3–0.6 s; 7.6 s the very first time on a fresh machine, while .NET compiles its types). Listing the
+Start menu took 0.4 s on Windows x64 and 28 s on the ARM64 runner — it runs in the background
+and no request waits for it.
 
 **Voice engine (Kokoro, one sentence of 10–57 characters, n = 6)**, median / p95:
-this Mac 1518 / 2655 ms; macOS arm64 runner 2211 / 3647; macOS x64 runner 8693 / 12488;
-Windows x64 1533–3222 / 2489–5323; Windows ARM64 2109 / 3361; Linux x64 3137 / 4873;
-Linux ARM64 1694 / 2949 (container on this Mac: 1553 / 2270). Jarvis speaks the first sentence
-while the next is being made.
+this Mac 1518 / 2655 ms; macOS arm64 runner 2856 / 4863; macOS x64 runner 4184 / 6872;
+Windows x64 1449 / 2351; Windows ARM64 2076 / 3413; Linux x64 1148 / 1901; Linux ARM64 1668 / 2931
+(Linux ARM64 container on this Mac: 1553 / 2270). Shared runners vary from run to run (the macOS x64
+runner measured 8693 / 12488 in an earlier run). Jarvis speaks the first sentence while the next is
+being made.
 
-**Task orchestrator overhead** (n = 200), median / p95: 0.03–0.26 ms / 0.08–0.59 ms on every platform.
+**Task orchestrator overhead** (n = 200), median / p95: 0.03–0.14 ms / 0.06–0.26 ms on every platform.
 
 **macOS, before and after (this Mac, typed requests through Jarvis Voice, n = 5, medians)**:
 
@@ -100,7 +117,7 @@ was slower under today's load (see above).
 | macOS arm64 | 381 MB | 148 MB tar.gz | — (`jarvisctl install` builds and signs the app locally) |
 | macOS x64 | 396 MB | 155 MB tar.gz | — |
 | Windows x64 | 428 MB | 182 MB zip | 124 MB setup.exe (per-user NSIS) |
-| Windows ARM64 | WINDOWS_ARM64_SIZE |
+| Windows ARM64 | 420 MB | 178 MB zip | 118 MB setup.exe (per-user NSIS) |
 | Linux x64 | 445 MB | 177 MB tar.gz | 137 MB .deb |
 | Linux ARM64 | 440 MB | 176 MB tar.gz | 135 MB .deb |
 

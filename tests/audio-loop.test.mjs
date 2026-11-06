@@ -39,9 +39,13 @@ test('play → sound server → microphone → wake word and request', { skip },
   const dir = mkdtempSync(join(tmpdir(), 'jarvis-audio-'))
   const file = join(dir, 'padded.wav')
   writeFileSync(file, Buffer.concat([header, data]))
+  // Where the speech itself ends inside the recording (the voice's own tail is quiet).
+  let last = 0
+  for (let i = 44; i + 1 < wav.length; i += 2) if (Math.abs(wav.readInt16LE(i)) > 600) last = (i - 44) / 2
+  const startedAt = Date.now()
   const played = await adapter.play(file)
   rmSync(dir, { recursive: true, force: true })
-  const endedAt = Date.now()
+  const speechEndedAt = startedAt + 700 + (last / 16000) * 1000
   assert.ok(played, 'the player played the recording')
   for (let i = 0; i < 60 && !heard.some((u) => u.woke); i++) await new Promise((r) => setTimeout(r, 100))
   mic.stop()
@@ -50,5 +54,5 @@ test('play → sound server → microphone → wake word and request', { skip },
   console.log(`# utterances: ${JSON.stringify(heard.map((u) => ({ text: u.text, woke: u.woke, keyword: u.keyword, seconds: u.seconds })))}`)
   assert.ok(wake, 'the wake phrase was heard through the sound server')
   assert.match(wake.request, /open the calculator/i)
-  console.log(`# end of speech → request ready: ${wake.at - endedAt} ms (includes ${listener.loadMs ? 0.55 * 1000 : 0} ms of silence detection)`)
+  console.log(`# end of speech → request transcribed: ${wake.at - speechEndedAt} ms (of which 550 ms is the silence that ends an utterance; includes the sound server's latency)`)
 })

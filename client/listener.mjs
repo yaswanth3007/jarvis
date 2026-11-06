@@ -24,11 +24,17 @@ const require = createRequire(import.meta.url)
 const WINDOW = 512 // Silero VAD window at 16 kHz
 
 export class Listener extends EventEmitter {
-  constructor({ modelsDir, log = () => {}, threads = 1 } = {}) {
+  constructor({ modelsDir, log = () => {}, threads = 1, padSeconds = 0.3 } = {}) {
     super()
     this.log = log
     this.modelsDir = modelsDir
     this.threads = threads
+    // Voice activity detection marks an utterance from the moment speech is certain, which can
+    // clip its first sound ("Hey" → "Pay"). The recogniser gets a little of what came just
+    // before and after, kept in a short ring buffer (memory only).
+    this.pad = Math.round(padSeconds * SAMPLE_RATE)
+    this.ring = new Float32Array(SAMPLE_RATE * 24)
+    this.fed = 0 // samples given to the VAD since its last reset (its own coordinates)
     this.pending = new Float32Array(0)
     this.samples = 0 // samples seen so far, for timing
     this.lastKeywordAt = -Infinity
@@ -90,7 +96,11 @@ export class Listener extends EventEmitter {
     merged.set(this.pending)
     merged.set(frame, this.pending.length)
     let off = 0
-    for (; off + WINDOW <= merged.length; off += WINDOW) this.vad.acceptWaveform(merged.subarray(off, off + WINDOW))
+    for (; off + WINDOW <= merged.length; off += WINDOW) {
+      const win = merged.subarray(off, off + WINDOW)
+      this.remember(win)
+      this.vad.acceptWaveform(win)
+    }
     this.pending = merged.slice(off)
     const speaking = this.vad.isDetected()
     if (speaking !== this.speaking) {
@@ -104,13 +114,30 @@ export class Listener extends EventEmitter {
     }
   }
 
+  remember(win) {
+    const n = this.ring.length
+    for (let i = 0; i < win.length; i++) this.ring[(this.fed + i) % n] = win[i]
+    this.fed += win.length
+  }
+
+  /** The utterance with `pad` samples of what came before and after it, as far as the ring still holds. */
+  padded(seg) {
+    const n = this.ring.length
+    const begin = Math.max(0, seg.start - this.pad, this.fed - n)
+    const end = Math.min(this.fed, seg.start + seg.samples.length + this.pad)
+    if (seg.start < begin || end <= begin) return seg.samples
+    const out = new Float32Array(end - begin)
+    for (let i = 0; i < out.length; i++) out[i] = this.ring[(begin + i) % n]
+    return out
+  }
+
   finishSegment(seg) {
     const start = seg.start / SAMPLE_RATE
     const seconds = seg.samples.length / SAMPLE_RATE
     const began = Date.now()
     let text = ''
     try {
-      text = this.transcribe(seg.samples)
+      text = this.transcribe(this.pad ? this.padded(seg) : seg.samples)
     } catch (err) {
       this.log(`transcription failed: ${err.message}`)
       return
@@ -124,6 +151,7 @@ export class Listener extends EventEmitter {
   /** Drops whatever was half-heard; used after Jarvis speaks so his own voice is not a request. */
   reset() {
     this.vad?.reset()
+    this.fed = 0
     this.pending = new Float32Array(0)
     this.speaking = false
   }

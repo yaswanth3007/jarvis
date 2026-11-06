@@ -65,7 +65,16 @@ export class PsHost {
         }
       })
       child.stderr.setEncoding('utf8')
-      child.stderr.on('data', (d) => this.log(`windows helper (${this.name}): ${String(d).trim().slice(0, 300)}`))
+      child.stderr.on('data', (d) => {
+        const text = String(d).trim()
+        this.log(`windows helper (${this.name}): ${text.slice(0, 300)}`)
+        // The script failed to load (a parse error): fail now instead of waiting for "ready".
+        if (/ParseException|ParserError|Unexpected token|is not recognized as/i.test(text)) {
+          clearTimeout(timer)
+          reject(new Error(`the Windows helper (${this.name}) could not start: ${text.slice(0, 200)}`))
+          child.kill()
+        }
+      })
       child.on('error', (err) => {
         clearTimeout(timer)
         reject(err)

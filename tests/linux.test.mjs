@@ -48,7 +48,7 @@ test('installed apps come from .desktop entries, and are matched by the name peo
 })
 
 const desktop = process.platform === 'linux' && process.env.JARVIS_E2E_DESKTOP === '1'
-test('a real desktop session: open, read, click, type, screenshot and close an app', { skip: desktop ? false : 'needs Linux with JARVIS_E2E_DESKTOP=1 (an X11 or Wayland session with AT-SPI)' }, async () => {
+test('a real desktop session: open, read, click, type, screenshot and close an app', { skip: desktop ? false : 'needs Linux with JARVIS_E2E_DESKTOP=1 (an X11 or Wayland session with AT-SPI)', timeout: 180000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'jarvis-e2e-'))
   const bin = join(dir, 'jarvis-test-app')
   copyFileSync(fileURLToPath(new URL('./e2e/jarvis-test-app', import.meta.url)), bin)

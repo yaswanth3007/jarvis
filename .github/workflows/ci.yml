@@ -84,6 +84,7 @@ jobs:
 
       - name: Tests (macOS)
         if: matrix.os == 'macos'
+        timeout-minutes: 25
         run: npm test
 
       - name: Swift tests and app build (macOS)
@@ -93,14 +94,27 @@ jobs:
           macos/jarvisctl build
           file macos/build/JarvisVoice.app/Contents/MacOS/JarvisVoice
 
+      - name: PowerShell scripts parse (Windows)
+        if: matrix.os == 'windows'
+        shell: powershell
+        run: |
+          foreach ($f in @('client\adapters\windows-host.ps1', 'client\tray\windows-tray.ps1')) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errors)
+            if ($errors) { $errors | Format-List; throw "$f does not parse" }
+            "$f parses"
+          }
+
       - name: Tests (Windows)
         if: matrix.os == 'windows'
+        timeout-minutes: 25
         env:
           JARVIS_E2E_DESKTOP: '1'
         run: npm test
 
       - name: Tests (Linux, in a headless desktop session with sound)
         if: matrix.os == 'linux'
+        timeout-minutes: 25
         env:
           JARVIS_E2E_DESKTOP: '1'
           JARVIS_E2E_AUDIO: '1'

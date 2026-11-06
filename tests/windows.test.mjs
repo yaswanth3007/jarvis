@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 const desktop = process.platform === 'win32' && process.env.JARVIS_E2E_DESKTOP === '1'
 const skip = desktop ? false : 'needs Windows with JARVIS_E2E_DESKTOP=1'
 
-test('the Windows helper starts and answers', { skip }, async () => {
+test('the Windows helper starts and answers', { skip, timeout: 240000 }, async () => {
   const { WindowsAdapter } = await import('../client/adapters/windows.mjs')
   const a = new WindowsAdapter()
   const t0 = Date.now()
@@ -19,7 +19,7 @@ test('the Windows helper starts and answers', { skip }, async () => {
   a.stop()
 })
 
-test('apps: list, open Notepad, read and type through UI Automation, keys, screenshot, close', { skip }, async () => {
+test('apps: list, open Notepad, read and type through UI Automation, keys, screenshot, close', { skip, timeout: 240000 }, async () => {
   const { WindowsAdapter } = await import('../client/adapters/windows.mjs')
   const a = new WindowsAdapter({ log: (m) => console.log(`# ${m}`) })
   await a.start()

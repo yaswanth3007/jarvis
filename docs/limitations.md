@@ -33,7 +33,7 @@ built and tested on which platform is in [validation.md](validation.md).
   focus APIs; if Windows still keeps another window in front of the app you named (seen on the
   Windows 11 ARM64 CI runner), Jarvis types into the field through UI Automation where the field
   allows it, and refuses key presses with an explanation — it never presses keys into the wrong
-  window. Clicking the app once and asking again works.
+  window. If that happens, bring the app to the front yourself and ask again.
 - The camera needs ffmpeg on PATH (no built-in way for a background program to take a photo).
 - Windows CI runners have no audio devices: microphone capture (PvRecorder/WASAPI) is not
   exercised in CI; the speech pipeline is (from recordings), and playback is exercised where a

@@ -86,7 +86,7 @@ test.after(async () => {
   home.cleanup()
 })
 
-test('it starts, reports its status and what this computer can do', { skip }, async () => {
+test('it starts, reports its status and what this computer can do', { skip, timeout: 120000 }, async () => {
   const status = JSON.parse(await control('status'))
   assert.equal(status.os, process.platform === 'win32' ? 'windows' : 'linux')
   assert.ok(['idle', 'starting'].includes(status.state))
@@ -95,7 +95,7 @@ test('it starts, reports its status and what this computer can do', { skip }, as
   assert.ok(Array.isArray(seen.caps.available))
 })
 
-test('local commands never go to Claude: the time, task status', { skip }, async () => {
+test('local commands never go to Claude: the time, task status', { skip, timeout: 120000 }, async () => {
   const asks = seen.asks.length
   assert.equal(await control('ask what time is it'), 'ok')
   assert.ok(await until(() => /saying/.test(readLog())))
@@ -104,7 +104,7 @@ test('local commands never go to Claude: the time, task status', { skip }, async
   assert.equal(seen.asks.length, asks, 'nothing was sent to the bridge')
 })
 
-test('a request goes to Claude with the user\'s words and the context apart', { skip }, async () => {
+test('a request goes to Claude with the user\'s words and the context apart', { skip, timeout: 120000 }, async () => {
   assert.equal(await control('ask tell me a joke'), 'ok')
   const ask = await until(() => seen.asks.find((a) => a.request === 'tell me a joke'))
   assert.ok(ask)
@@ -112,14 +112,14 @@ test('a request goes to Claude with the user\'s words and the context apart', { 
   assert.ok(await until(() => /latency \(claude\)/.test(readLog())))
 })
 
-test('the bridge can ask for a desktop action only while a request of ours is running', { skip }, async () => {
+test('the bridge can ask for a desktop action only while a request of ours is running', { skip, timeout: 120000 }, async () => {
   assert.equal(await control('ask list my apps'), 'ok')
   const reply = await until(() => seen.replies.find((r) => typeof r.text === 'string' || r.error))
   assert.ok(reply, 'the desktop action was answered')
   assert.ok(reply.text?.startsWith('Running:') || reply.error, JSON.stringify(reply))
 })
 
-test('a permission question is asked out loud and answered; "allow always" is remembered', { skip }, async () => {
+test('a permission question is asked out loud and answered; "allow always" is remembered', { skip, timeout: 120000 }, async () => {
   assert.equal(await control('ask look at my screen'), 'ok')
   assert.ok(await until(async () => /asking for permission: screen/.test(readLog())))
   await until(async () => !(await control('answer allow always')).startsWith('error'), 15_000)
@@ -129,7 +129,7 @@ test('a permission question is asked out loud and answered; "allow always" is re
   assert.equal(store.capabilities.screen, 'allow')
 })
 
-test('"revoke camera access" by voice changes only Jarvis\'s own permission', { skip }, async () => {
+test('"revoke camera access" by voice changes only Jarvis\'s own permission', { skip, timeout: 120000 }, async () => {
   assert.equal(await control('ask revoke camera access'), 'ok')
   const ok = await until(() => {
     try {
@@ -141,7 +141,7 @@ test('"revoke camera access" by voice changes only Jarvis\'s own permission', { 
   assert.ok(ok)
 })
 
-test('what it hears (a recording played into the recogniser) is handled like speech', { skip }, async (t) => {
+test('what it hears (a recording played into the recogniser) is handled like speech', { skip, timeout: 120000 }, async (t) => {
   const status = JSON.parse(await control('status'))
   if (status.speechModels !== 'loaded') {
     if (process.env.JARVIS_REQUIRE_SPEECH === '1') assert.fail('speech models should be loaded in CI')
@@ -159,8 +159,9 @@ test('it never logs what was said (logTranscripts is off by default)', { skip },
   assert.ok(!/tell me a joke|look at my screen|revoke camera/.test(log), 'no request text in the log')
 })
 
-test('it quits cleanly when asked', { skip }, async () => {
+test('it quits cleanly when asked', { skip, timeout: 120000 }, async () => {
+  const exited = new Promise((r) => (client.exitCode !== null ? r(client.exitCode) : client.once('exit', r)))
   assert.match(await control('quit'), /quitting/)
-  const code = await new Promise((r) => client.once('exit', r))
+  const code = await exited
   assert.equal(code, 0)
 })

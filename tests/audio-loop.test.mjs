@@ -10,7 +10,7 @@ import { paths } from '../core/paths.mjs'
 const MODELS = process.env.JARVIS_TEST_MODELS ?? paths.models
 const skip = process.platform === 'linux' && process.env.JARVIS_E2E_AUDIO === '1' && modelStatus(MODELS).all ? false : 'needs Linux, JARVIS_E2E_AUDIO=1 and the speech models'
 
-test('play → sound server → microphone → wake word and request', { skip }, async () => {
+test('play → sound server → microphone → wake word and request', { skip, timeout: 120000 }, async () => {
   const { openMicrophone } = await import('../client/audio.mjs')
   const { Listener } = await import('../client/listener.mjs')
   const { LinuxAdapter } = await import('../client/adapters/linux.mjs')

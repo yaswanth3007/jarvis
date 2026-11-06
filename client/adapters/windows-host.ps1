@@ -105,7 +105,8 @@ function Is-Front($win) {
 
 function Front-Title {
   $front = Get-Front
-  if ($front -and $front.title) { return "“$($front.title)”" }
+  # (Plain quotes: PowerShell reads curly quotes as string delimiters.)
+  if ($front -and $front.title) { return "'" + $front.title + "'" }
   return 'another window'
 }
 

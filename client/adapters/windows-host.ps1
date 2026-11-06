@@ -49,11 +49,28 @@ function Get-AppWindows {
   return $list
 }
 
+# Every top-level window UI Automation can see, whichever process owns it — this also finds
+# windows a process's "main window" misses (packaged/Store apps, apps with several windows).
+function Get-TopWindows {
+  $list = @()
+  $kids = $AE::RootElement.FindAll($TS::Children, [System.Windows.Automation.Condition]::TrueCondition)
+  foreach ($w in $kids) {
+    try {
+      $c = $w.Current
+      if (-not $c.Name -or $c.NativeWindowHandle -eq 0 -or $c.IsOffscreen) { continue }
+      $pname = $null; $desc = $null; $path = $null
+      try { $p = Get-Process -Id $c.ProcessId; $pname = $p.ProcessName; $path = $p.Path; $desc = $p.MainModule.FileVersionInfo.FileDescription } catch { }
+      $list += [pscustomobject]@{ pid = $c.ProcessId; name = $pname; title = $c.Name; description = $desc; path = $path; handle = [int64]$c.NativeWindowHandle }
+    } catch { }
+  }
+  return $list
+}
+
 # The process for an app name: exact process name, file description, or words of the window title.
 function Find-AppWindow([string]$name) {
   $want = Norm $name
   if (-not $want) { return $null }
-  $wins = Get-AppWindows
+  $wins = @(Get-AppWindows) + @(Get-TopWindows)
   $hit = $wins | Where-Object { (Norm $_.name) -eq $want -or (Norm $_.description) -eq $want } | Select-Object -First 1
   if (-not $hit) { $hit = $wins | Where-Object { (Norm $_.title).EndsWith($want) -or (Norm $_.title).StartsWith($want) } | Select-Object -First 1 }
   if (-not $hit) { $hit = $wins | Where-Object { (Norm $_.description).Contains($want) -or (Norm $_.title).Contains($want) } | Select-Object -First 1 }
@@ -233,7 +250,16 @@ $handlers = @{
     }
     , $apps
   }
-  'running' = { param($a) , @(Get-AppWindows | ForEach-Object { [pscustomobject]@{ pid = $_.pid; name = $_.name; title = $_.title; description = $_.description } }) }
+  'running' = { param($a)
+    $seen = @{}
+    $out = @()
+    foreach ($w in (@(Get-AppWindows) + @(Get-TopWindows))) {
+      if ($seen.ContainsKey([string]$w.handle)) { continue }
+      $seen[[string]$w.handle] = $true
+      $out += [pscustomobject]@{ pid = $w.pid; name = $w.name; title = $w.title; description = $w.description }
+    }
+    , $out
+  }
   'front' = { param($a) Get-Front }
   'open' = { param($a)
     $id = [string]$a.id

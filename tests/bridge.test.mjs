@@ -15,7 +15,7 @@ const PORT = 18787 + (process.pid % 500)
 let bridge
 
 test.before(async () => {
-  bridge = spawn(process.execPath, ['--import', fileURLToPath(new URL('../core/loopback.mjs', import.meta.url)), fileURLToPath(new URL('../bridge/server.mjs', import.meta.url))], {
+  bridge = spawn(process.execPath, ['--import', new URL('../core/loopback.mjs', import.meta.url).href, fileURLToPath(new URL('../bridge/server.mjs', import.meta.url))], {
     env: { ...process.env, JARVIS_BRIDGE_PORT: String(PORT), JARVIS_PERMISSIONS: '1', JARVIS_ALLOW_WRITES: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   })

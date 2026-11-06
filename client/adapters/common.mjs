@@ -124,3 +124,32 @@ export async function waitFor(check, ms = 10_000, every = 300) {
   }
   return null
 }
+
+/**
+ * Runs a launcher (gio, gtk-launch…) and waits only for it to exit — with no pipes, because the
+ * app it starts would inherit them and keep them open for as long as it runs.
+ * @returns {Promise<number|null>} the exit code (null if it could not run or timed out)
+ */
+export function runLauncher(cmd, args = [], { timeout = 15_000, env, cwd } = {}) {
+  return new Promise((resolve) => {
+    let child
+    try {
+      child = spawn(cmd, args, { stdio: 'ignore', windowsHide: true, env: env ?? process.env, cwd })
+    } catch {
+      resolve(null)
+      return
+    }
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      resolve(null)
+    }, timeout)
+    child.once('error', () => {
+      clearTimeout(timer)
+      resolve(null)
+    })
+    child.once('exit', (code) => {
+      clearTimeout(timer)
+      resolve(code)
+    })
+  })
+}

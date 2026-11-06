@@ -164,7 +164,8 @@ export class WindowsAdapter {
     }
     if (!app) return { ok: false, message: `${name} isn't installed (it isn't in the Start menu).` }
     await this.ui.call('open', { id: app.id })
-    const appeared = await waitFor(() => this.find(label), 15_000, 400)
+    // A first launch (Store apps especially) can take a while on a slow or busy PC.
+    const appeared = await waitFor(() => this.find(label), 25_000, 400)
     return appeared
       ? { ok: true, message: `${label} is open.`, name: label }
       : { ok: true, message: `${label} was started; its window hasn't appeared yet.`, name: label }

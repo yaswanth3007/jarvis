@@ -221,5 +221,5 @@ function readdirSafe(dir) {
 /** The capabilities, as one line each, for `jarvis doctor` and the assistant's own prompt. */
 export function describeCapabilities(report) {
   return Object.entries(report.capabilities).map(([key, c]) =>
-    `${c.available ? 'yes' : 'no '}  ${key.padEnd(15)} ${c.via}${c.reason ? ` — ${c.reason}` : ''}${c.needs && c.available ? ` (needs: ${c.needs})` : ''}`)
+    `${c.available ? 'yes' : 'no '}  ${key.padEnd(15)} ${[c.via !== '—' ? c.via : '', c.reason].filter(Boolean).join(' — ')}${c.needs && c.available ? ` (needs: ${c.needs})` : ''}`)
 }

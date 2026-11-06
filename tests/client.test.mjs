@@ -21,6 +21,22 @@ let client
 let bridge
 const seen = { asks: [], replies: [], connections: 0 }
 
+function control(line) {
+  return sendControl({ path: paths.control, key: ensureKey(), command: line, timeoutMs: 8000 })
+}
+function readLog() {
+  return existsSync(`${paths.logs}/voice.log`) ? readFileSync(`${paths.logs}/voice.log`, 'utf8') : ''
+}
+async function until(check, ms = 15_000) {
+  const end = Date.now() + ms
+  while (Date.now() < end) {
+    const v = await check()
+    if (v) return v
+    await new Promise((r) => setTimeout(r, 150))
+  }
+  return null
+}
+
 test.before(async () => {
   if (!supported) return
   const key = ensureKey()
@@ -69,18 +85,6 @@ test.after(async () => {
   bridge?.close()
   home.cleanup()
 })
-
-const control = (line) => sendControl({ path: paths.control, key: ensureKey(), command: line, timeoutMs: 8000 })
-const readLog = () => (existsSync(`${paths.logs}/voice.log`) ? readFileSync(`${paths.logs}/voice.log`, 'utf8') : '')
-async function until(check, ms = 15_000) {
-  const end = Date.now() + ms
-  while (Date.now() < end) {
-    const v = await check()
-    if (v) return v
-    await new Promise((r) => setTimeout(r, 150))
-  }
-  return null
-}
 
 test('it starts, reports its status and what this computer can do', { skip }, async () => {
   const status = JSON.parse(await control('status'))

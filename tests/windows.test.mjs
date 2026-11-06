@@ -33,10 +33,16 @@ test('apps: list, open Notepad, read and type through UI Automation, keys, scree
   try {
     const apps = await time('list', () => a.installedApps(true))
     assert.ok(apps.length > 0, 'the Start menu lists apps')
+    const notepad = await a.resolveApp('Notepad')
+    console.log(`# Start menu: ${apps.length} apps; Notepad is ${JSON.stringify(notepad)}`)
     const opened = await time('open', () => a.openApp('Notepad'))
+    console.log(`# open: ${opened.message}`)
     assert.ok(opened.ok, opened.message)
     await new Promise((r) => setTimeout(r, 1500))
-    const read = await time('read', () => a.readWindow('Notepad'))
+    const read = await time('read', () => a.readWindow('Notepad')).catch(async (err) => {
+      console.log(`# windows now: ${JSON.stringify(await a.running())}`)
+      throw err
+    })
     assert.ok(read.title.length > 0, JSON.stringify(read).slice(0, 200))
     const typed = await time('type', () => a.typeText('Notepad', 'hello from jarvis'))
     assert.match(typed, /typed/)

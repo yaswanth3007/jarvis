@@ -18,6 +18,9 @@ const env = {
   ...process.env, JARVIS_HOME: join(scratch, 'support'), JARVIS_LOG_DIR: join(scratch, 'logs'), JARVIS_CACHE_DIR: join(scratch, 'cache'),
   JARVIS_VOICE_KEY_FILE: join(scratch, 'support', 'bridge.key'), JARVIS_BRIDGE_PORT: '28787', JARVIS_FACE_PORT: '5199', JARVIS_AGENT_VOICE_ENGINE: '0',
 }
+// The package's own modules (imported below) read Jarvis's folders from process.env: point it
+// at the scratch folders too, so the smoke test never touches this account's real Jarvis.
+Object.assign(process.env, env)
 const say = (m) => console.log(`[smoke] ${m}`)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const fail = (m) => {

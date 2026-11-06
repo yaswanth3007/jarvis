@@ -24,6 +24,9 @@ if command -v pulseaudio >/dev/null; then
   pactl load-module module-null-sink sink_name=jarvis_test sink_properties=device.description=JarvisTest >/dev/null
   pactl set-default-sink jarvis_test
   pactl set-default-source jarvis_test.monitor
+  # A real microphone is always on; the virtual sink must not suspend when idle (it would swallow
+  # the first syllables of whatever is played next).
+  pactl unload-module module-suspend-on-idle >/dev/null 2>&1 || true
 fi
 sleep 1
 exec "$@"

@@ -25,7 +25,7 @@
 import { spawn } from 'node:child_process'
 import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { ensureKey, freshNonce, proveIdentity, sameDigest } from '../bridge/voice-auth.mjs'
 import { paths } from './paths.mjs'
 
@@ -131,7 +131,8 @@ const services = [
     name: 'bridge',
     port: BRIDGE_PORT,
     health: `http://127.0.0.1:${BRIDGE_PORT}/health`,
-    args: ['--import', join(HERE, 'loopback.mjs'), join(REPO, 'bridge/server.mjs')],
+    // --import takes a URL: on Windows a bare "C:\…" path would read as a URL scheme.
+    args: ['--import', pathToFileURL(join(HERE, 'loopback.mjs')).href, join(REPO, 'bridge/server.mjs')],
     env: {},
     grace: 30_000,
   },

@@ -10,7 +10,7 @@ import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { findOnPath, linuxSession } from '../../core/platform.mjs'
-import { launchDetached, matchApp, plain, run, sleep, waitFor } from './common.mjs'
+import { launchDetached, matchApp, plain, run, runLauncher, sleep, waitFor } from './common.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ATSPI = join(HERE, 'linux-atspi.py')
@@ -255,10 +255,27 @@ export class LinuxAdapter {
       const focused = await this.focus(app)
       return { ok: true, message: `${app.name} is open${focused || !this.session.x11 ? '' : ', though it could not be brought to the front'}.`, name: app.name }
     }
-    const launcher = findOnPath('gtk-launch', this.env) ? ['gtk-launch', [app.id.replace(/\.desktop$/, '')]]
-      : findOnPath('gio', this.env) ? ['gio', ['launch', app.file]] : [app.argv[0], app.argv.slice(1)]
-    const started = await launchDetached(launcher[0], launcher[1], { cwd: this.env.HOME ?? homedir() })
-    if (!started.ok) return { ok: false, message: `${app.name} could not be started (${started.error?.message ?? 'unknown error'}).` }
+    // The desktop's own launcher, given the entry's full path (no lookup that could pick another
+    // entry or miss this one), then gtk-launch, then the entry's Exec line directly.
+    const cwd = this.env.HOME ?? homedir()
+    let started = false
+    let why = 'no launcher worked'
+    if (findOnPath('gio', this.env)) {
+      const code = await runLauncher('gio', ['launch', app.file], { env: this.env, cwd })
+      started = code === 0
+      if (!started) why = `gio exited ${code}`
+    }
+    if (!started && findOnPath('gtk-launch', this.env)) {
+      const code = await runLauncher('gtk-launch', [app.id.replace(/\.desktop$/, '')], { env: this.env, cwd })
+      started = code === 0
+      if (!started) why = `gtk-launch exited ${code}`
+    }
+    if (!started) {
+      const r = await launchDetached(app.argv[0], app.argv.slice(1), { cwd, env: this.env })
+      started = r.ok
+      if (!started) why = r.error?.message ?? why
+    }
+    if (!started) return { ok: false, message: `${app.name} could not be started (${why}).` }
     const up = await waitFor(() => this.pidsFor(app).length > 0, 15_000, 400)
     return { ok: true, message: up ? `${app.name} is open.` : `${app.name} was started; it hasn't appeared yet.`, name: app.name }
   }

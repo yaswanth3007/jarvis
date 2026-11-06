@@ -33,6 +33,7 @@ export class Tray extends EventEmitter {
       child = spawn('python3', ['-I', join(HERE, 'tray/linux-tray.py')], { stdio: ['pipe', 'pipe', 'pipe'] })
     }
     this.child = child
+    child.stdin.on('error', () => {})
     child.stdout.setEncoding('utf8')
     let buf = ''
     child.stdout.on('data', (d) => {

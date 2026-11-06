@@ -33,6 +33,7 @@ test('apps: list, open Notepad, read and type through UI Automation, keys, scree
   try {
     const apps = await time('list', () => a.installedApps(true))
     assert.ok(apps.length > 0, 'the Start menu lists apps')
+    console.log(`# before opening, a Notepad window: ${JSON.stringify(await a.find('Notepad').catch((e) => e.message))}`)
     const notepad = await a.resolveApp('Notepad')
     console.log(`# Start menu: ${apps.length} apps; Notepad is ${JSON.stringify(notepad)}`)
     const opened = await time('open', () => a.openApp('Notepad'))

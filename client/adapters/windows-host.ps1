@@ -98,9 +98,14 @@ function Focus-Window($win) {
 }
 
 function Require-Window([string]$app) {
-  $win = Find-AppWindow $app
-  if (-not $win) { throw "$app is not open (no window of it was found)." }
-  return $win
+  # A window that has only just opened can take a moment to be visible to UI Automation.
+  $until = (Get-Date).AddSeconds(3)
+  do {
+    $win = Find-AppWindow $app
+    if ($win) { return $win }
+    Start-Sleep -Milliseconds 300
+  } while ((Get-Date) -lt $until)
+  throw "$app is not open (no window of it was found)."
 }
 
 function Read-Tree($root, [int]$maxNodes = 1500, [int]$maxChars = 12000) {

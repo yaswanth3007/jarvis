@@ -33,6 +33,8 @@ export class PsHost {
       const ps = findOnPath('powershell') ?? 'powershell.exe'
       const child = spawn(ps, ['-NoProfile', '-NonInteractive', '-NoLogo', '-Command', '-'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
       this.child = child
+      // Writing to a helper that is shutting down is not an error worth crashing over.
+      child.stdin.on('error', () => {})
       let buffer = ''
       const timer = setTimeout(() => reject(new Error(`the Windows helper (${this.name}) did not start`)), 30_000)
       child.stdout.setEncoding('utf8')
@@ -127,11 +129,23 @@ export class WindowsAdapter {
     this.sound.stop()
   }
 
+  /**
+   * The Start menu's apps. Listing them can take seconds on a slow PC, so a known list is
+   * answered at once and refreshed in the background when it is more than a minute old.
+   */
   async installedApps(refresh = false) {
-    if (!refresh && this.apps && Date.now() - this.appsAt < 60_000) return this.apps
-    const list = await this.ui.call('apps', {}, 60_000)
-    this.apps = (Array.isArray(list) ? list : [list]).filter((a) => a?.name && a?.id)
-    this.appsAt = Date.now()
+    const load = () => {
+      this.appsLoading ??= this.ui.call('apps', {}, 90_000).then((list) => {
+        this.apps = (Array.isArray(list) ? list : [list]).filter((a) => a?.name && a?.id)
+        this.appsAt = Date.now()
+        return this.apps
+      }).finally(() => {
+        this.appsLoading = null
+      })
+      return this.appsLoading
+    }
+    if (refresh || !this.apps) return load()
+    if (Date.now() - this.appsAt > 60_000) void load().catch(() => {})
     return this.apps
   }
 
@@ -157,10 +171,16 @@ export class WindowsAdapter {
     const app = await this.resolveApp(name)
     const label = app?.name ?? name
     // Already open: bring it forward.
-    const open = (await this.find(label)) ?? (app ? null : await this.find(name))
+    const open = (await this.find(label).catch(() => null)) ?? (app ? null : await this.find(name).catch(() => null))
     if (open) {
-      const r = await this.ui.call('focus', { name: label })
-      return { ok: true, message: `${label} is open${r?.focused ? '' : ', though Windows kept another window in front'}.`, name: label }
+      this.log(`open ${label}: already running (window “${plain(open.title, 60)}”, pid ${open.pid})`)
+      try {
+        const r = await this.ui.call('focus', { name: label })
+        return { ok: true, message: `${label} is open${r?.focused ? '' : ', though Windows kept another window in front'}.`, name: label }
+      } catch (err) {
+        // The window went away between the two looks: open it as if it was not running.
+        this.log(`open ${label}: ${err.message} — starting it`)
+      }
     }
     if (!app) return { ok: false, message: `${name} isn't installed (it isn't in the Start menu).` }
     await this.ui.call('open', { id: app.id })

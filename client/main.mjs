@@ -266,16 +266,14 @@ async function handleRequest(text, { spoken = false } = {}) {
   if (command) return taskCommand(command)
   const perm = parsePermissionCommand(text, (name) => resolveForPermission(name), { home: paths.home, sep: OS === 'windows' ? '\\' : '/' })
   if (perm) return permissionCommand(perm)
-  const installed = new Set()
-  try {
-    for (const a of await adapter.installedApps()) installed.add(normalized(a.name))
-  } catch {
-    /* apps unknown: the plan falls to Claude */
-  }
+  // The installed apps as last listed (listing can take seconds on Windows: it is never waited for
+  // here; until the first list arrives, app requests simply go to Claude).
+  const installed = new Set((adapter.apps ?? []).map((a) => normalized(a.name)))
+  if (!adapter.apps) void adapter.installedApps().catch(() => {})
   const plan = parseAppPlan(text, (name) => installed.has(name))
   if (plan) return appPlan(plan)
   const single = /^(?:please )?(open|launch|start|close|quit)\s+(?:the\s+|my\s+)?(.+?)(?:\s+app)?[.!?]*$/i.exec(text.trim())
-  if (single) {
+  if (single && adapter.apps) {
     const verb = /close|quit/i.test(single[1]) ? 'close' : 'open'
     const app = await adapter.resolveApp(single[2]).catch(() => null)
     if (app) return appPlan({ verb, stages: [[single[2]]] })
@@ -840,7 +838,10 @@ async function handleControl(line) {
 let mic = null
 let control = null
 
+let shuttingDown = false
 async function shutdown(reason) {
+  if (shuttingDown) return
+  shuttingDown = true
   log(`stopping (${reason})`)
   try {
     mic?.stop()
@@ -858,7 +859,8 @@ for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => v
 process.on('message', (m) => m === 'shutdown' && void shutdown('stop requested'))
 process.on('uncaughtException', (err) => {
   log(`error: ${err?.stack ?? err}`)
-  setTimeout(() => process.exit(1), 100)
+  // While stopping, a helper's pipe closing under a write is expected: still a clean stop.
+  setTimeout(() => process.exit(shuttingDown ? 0 : 1), 100)
 })
 process.on('unhandledRejection', (err) => log(`unhandled: ${err?.stack ?? err}`))
 
@@ -878,6 +880,8 @@ if (KEY) control = startControl({ path: paths.control, key: KEY, handle: handleC
 else log('no per-install key yet — start the Jarvis agent (jarvis start); the control channel waits for it')
 
 await adapter.start().catch((err) => log(`desktop helper: ${err.message}`))
+// The installed apps, listed in the background so the first request never waits for it.
+void adapter.installedApps().then((list) => log(`${list.length} installed apps`)).catch((err) => log(`installed apps: ${err.message}`))
 if (!NO_TRAY && caps.tray.available && tray.start()) {
   tray.on('menu', (item) => {
     if (item === 'mute') setMuted(!muted)

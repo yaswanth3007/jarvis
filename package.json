@@ -18,7 +18,7 @@
     "bridge:writes": "JARVIS_ALLOW_WRITES=1 node bridge/server.mjs",
     "setup": "node scripts/setup.mjs",
     "jarvis": "node bin/jarvis.mjs",
-    "test": "node --test --test-concurrency=1 tests/",
+    "test": "node --test --test-concurrency=1 \"tests/*.test.mjs\"",
     "test:swift": "node tests/run-swift-tests.mjs",
     "test:all": "npm test && npm run test:swift",
     "package": "node packaging/package.mjs"

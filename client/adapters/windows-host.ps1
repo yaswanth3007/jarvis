@@ -96,13 +96,25 @@ function Get-Front {
 # Automation focus first; if Windows keeps another window in front (it restricts background
 # programs), SetForegroundWindow while attached to the foreground window's input queue. Windows
 # still never lets a normal program act on elevated apps.
+# Is this window the one in front? By window handle (apps like the new Notepad run several
+# processes), or by process when the handle differs.
+function Is-Front($win) {
+  $front = Get-Front
+  return ($null -ne $front -and ($front.handle -eq [int64]$win.handle -or $front.pid -eq $win.pid))
+}
+
+function Front-Title {
+  $front = Get-Front
+  if ($front -and $front.title) { return "“$($front.title)”" }
+  return 'another window'
+}
+
 function Focus-Window($win) {
   $h = [IntPtr][int64]$win.handle
   if ([JarvisWin]::IsIconic($h)) { [void][JarvisWin]::ShowWindowAsync($h, 9) } # SW_RESTORE
   try { $AE::FromHandle($h).SetFocus() } catch { }
   Start-Sleep -Milliseconds 120
-  $front = Get-Front
-  if ($null -ne $front -and $front.pid -eq $win.pid) { return $true }
+  if (Is-Front $win) { return $true }
   $fg = [JarvisWin]::GetForegroundWindow()
   [uint32]$fgPid = 0
   $fgThread = [JarvisWin]::GetWindowThreadProcessId($fg, [ref]$fgPid)
@@ -116,8 +128,7 @@ function Focus-Window($win) {
     if ($attached) { [void][JarvisWin]::AttachThreadInput($me, $fgThread, $false) }
   }
   Start-Sleep -Milliseconds 150
-  $front = Get-Front
-  return ($null -ne $front -and $front.pid -eq $win.pid)
+  return (Is-Front $win)
 }
 
 function Require-Window([string]$app) {
@@ -343,11 +354,10 @@ $handlers = @{
         $vp.SetValue([string]$vp.Current.Value + [string]$a.text)
         return [pscustomobject]@{ verified = $vp.Current.Value.Contains([string]$a.text); via = 'value' }
       }
-      throw "Windows kept another window in front of $($a.name), so nothing was typed. Click $($a.name) once and ask again."
+      throw "Windows kept $(Front-Title) in front of $($a.name), so nothing was typed. Click $($a.name) once and ask again."
     }
     if ($target -and $a.field) { try { $target.SetFocus() } catch { } }
-    $front = Get-Front
-    if (-not $front -or $front.pid -ne $w.pid) { throw "$($a.name) is no longer in front, so nothing was typed." }
+    if (-not (Is-Front $w)) { throw "$($a.name) is no longer in front ($(Front-Title) is), so nothing was typed." }
     [System.Windows.Forms.SendKeys]::SendWait((Escape-SendKeys ([string]$a.text)))
     $value = $null
     $vp = $null
@@ -357,7 +367,7 @@ $handlers = @{
   }
   'keys' = { param($a)
     $w = Require-Window ([string]$a.name)
-    if (-not (Focus-Window $w)) { throw "Windows kept another window in front of $($a.name), so no keys were pressed. Click $($a.name) once and ask again." }
+    if (-not (Focus-Window $w)) { throw "Windows kept $(Front-Title) in front of $($a.name), so no keys were pressed. Click $($a.name) once and ask again." }
     [System.Windows.Forms.SendKeys]::SendWait((Convert-Keys ([string]$a.keys)))
     'pressed'
   }

@@ -46,10 +46,19 @@ test('apps: list, open Notepad, read and type through UI Automation, keys, scree
     })
     assert.ok(read.title.length > 0, JSON.stringify(read).slice(0, 200))
     const typed = await time('type', () => a.typeText('Notepad', 'hello from jarvis'))
+    console.log(`# type: ${typed}`)
     assert.match(typed, /typed/)
     await new Promise((r) => setTimeout(r, 300))
     assert.match((await a.readWindow('Notepad')).text, /hello from jarvis/)
-    assert.equal(await time('keys', () => a.pressKeys('Notepad', 'ctrl+a')), 'pressed')
+    // Keys go only to the app named. If Windows keeps another window in front (it restricts
+    // background programs), Jarvis must refuse and say so — never press keys into the wrong window.
+    const keys = await time('keys', () => a.pressKeys('Notepad', 'ctrl+a').catch((err) => err))
+    if (keys instanceof Error) {
+      assert.match(keys.message, /kept .+ in front of Notepad, so no keys were pressed/)
+      console.log(`# keys refused honestly: ${keys.message}`)
+    } else {
+      assert.equal(keys, 'pressed')
+    }
     const front = await a.frontmost()
     assert.ok(front, 'something is in front')
     const shot = await time('screenshot', () => a.screenshot({}))

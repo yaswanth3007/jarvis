@@ -24,7 +24,7 @@ before and is optional.
 
 ```
  login ──▶ launchd
-            ├─ local.jarvis.agent  node macos/agent/supervisor.mjs
+            ├─ local.jarvis.agent  node core/supervisor.mjs   (shared with Windows and Linux)
             │     ├─ bridge        node bridge/server.mjs   127.0.0.1:8787   (the brain: Claude Code)
             │     ├─ face          vite                     localhost:5173   (the web interface, as before)
             │     └─ voice-engine  Kokoro neural voice      127.0.0.1:8790
@@ -283,9 +283,10 @@ Two per-user LaunchAgents in `~/Library/LaunchAgents`, both `RunAtLoad`, restart
 if they crash, stopped cleanly at logout or shutdown, limited to your GUI
 session:
 
-- `local.jarvis.agent` — `node macos/agent/supervisor.mjs`: runs the bridge,
-  the web interface and the voice engine, reuses any copy already running (no
-  duplicates), restarts anything that crashes or hangs.
+- `local.jarvis.agent` — `node core/supervisor.mjs` (the same supervisor Windows and Linux
+  use; `macos/agent/supervisor.mjs` remains as a shim for LaunchAgents written by earlier
+  versions): runs the bridge, the web interface and the voice engine, reuses any copy already
+  running (no duplicates), restarts anything that crashes or hangs.
 - `local.jarvis.voice` — `~/Applications/JarvisVoice.app`, the menu bar app.
 
 They appear in **System Settings → General → Login Items & Extensions → Allow in
@@ -478,3 +479,9 @@ lookup where it is available.
   `JARVIS_AGENT_VOICE_ENGINE=0` in `agent.env` to use the instant macOS voice
   instead (Premium voices from System Settings → Accessibility → Spoken Content
   sound much better than the defaults).
+
+## Windows and Linux
+
+The same assistant runs on Windows and Linux too — the same wake phrase, commands, permission
+broker and task rules, with each OS's own APIs. See [docs/setup-windows.md](../docs/setup-windows.md),
+[docs/setup-linux.md](../docs/setup-linux.md) and [docs/architecture.md](../docs/architecture.md).

@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""A tiny GTK window for the Linux desktop tests: a label, a text field and a button."""
+import gi
+
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk  # noqa: E402
+
+win = Gtk.Window(title="Jarvis Test Window")
+win.set_default_size(420, 160)
+box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+label = Gtk.Label(label="Hello from the test window")
+entry = Gtk.Entry()
+entry.get_accessible().set_name("Message")
+button = Gtk.Button(label="Press me")
+button.connect("clicked", lambda *_: label.set_text("Button was pressed"))
+for w in (label, entry, button):
+    box.pack_start(w, False, False, 0)
+win.add(box)
+win.connect("destroy", Gtk.main_quit)
+win.show_all()
+entry.grab_focus()
+Gtk.main()

@@ -1,0 +1,414 @@
+#!/bin/bash
+# jarvisctl — install and control the always-on JARVIS voice assistant for macOS.
+#
+#   macos/jarvisctl install            build the menu bar app; start everything now and at every login
+#   macos/jarvisctl status             what is running, and what the assistant is doing
+#   macos/jarvisctl doctor             check each piece end to end
+#   macos/jarvisctl start|stop|restart [agent|voice|all]
+#   macos/jarvisctl mute | unmute | talk | stop-speaking | reload
+#   macos/jarvisctl say "text"         speak a line through the assistant's voice
+#   macos/jarvisctl ask "question"     send a typed question through the full voice pipeline
+#   macos/jarvisctl answer "allow"     answer the question Jarvis is asking, typed instead of spoken
+#   macos/jarvisctl permissions        what Jarvis may do (its own rules and macOS's), and recent decisions
+#   macos/jarvisctl tasks [all]        what Jarvis is working on: each task's id, status, locks and timing
+#   macos/jarvisctl cancel <n|all>     stop one task, or every task
+#   macos/jarvisctl devices            which microphone and speakers Jarvis is using
+#   macos/jarvisctl logs               follow every log
+#   macos/jarvisctl signing-identity   create a local signing certificate so macOS keeps permissions across updates
+#   macos/jarvisctl uninstall [--purge]
+#
+# Nothing here needs sudo: it only touches your own ~/Library and ~/Applications.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$HERE/.." && pwd)"
+DOMAIN="gui/$(id -u)"
+AGENT="local.jarvis.agent"
+VOICE="local.jarvis.voice"
+LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
+APP="$HOME/Applications/JarvisVoice.app"
+BUILT_APP="$HERE/build/JarvisVoice.app"
+SUPPORT="$HOME/Library/Application Support/JarvisVoice"
+LOGS="$HOME/Library/Logs/Jarvis"
+CACHE="$HOME/Library/Caches/JarvisVoice"
+SOCKET="$SUPPORT/control.sock"
+
+out() { printf '%s\n' "$*"; }
+die() { printf 'jarvisctl: %s\n' "$*" >&2; exit 1; }
+plist_of() { printf '%s/%s.plist' "$LAUNCH_AGENTS" "$1"; }
+is_loaded() { launchctl print "$DOMAIN/$1" >/dev/null 2>&1; }
+xml() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' <<<"$1"; }
+
+node_bin() {
+  local n="${NODE_BIN:-}"
+  [ -n "$n" ] || n="$(command -v node || true)"
+  if [ -z "$n" ]; then
+    for c in /opt/homebrew/bin/node /usr/local/bin/node; do [ -x "$c" ] && n="$c" && break; done
+  fi
+  [ -n "$n" ] || die "Node.js was not found — install Node 20 or newer first."
+  printf '%s' "$n"
+}
+
+labels_for() {
+  case "${1:-all}" in
+    agent) echo "$AGENT" ;;
+    voice) echo "$VOICE" ;;
+    all) echo "$AGENT $VOICE" ;;
+    *) die "unknown target '$1' (use agent, voice or all)" ;;
+  esac
+}
+
+# --------------------------------------------------------------------------
+# Building and installing
+# --------------------------------------------------------------------------
+
+build() {
+  command -v swiftc >/dev/null 2>&1 || die "swiftc not found — install Apple's Command Line Tools: xcode-select --install"
+  local app="$BUILT_APP"
+  rm -rf "$app"
+  mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+  out "Building Jarvis Voice (Swift)…"
+  swiftc -O -swift-version 5 -target "$(uname -m)-apple-macos26.0" \
+    -o "$app/Contents/MacOS/JarvisVoice" "$HERE"/JarvisVoice/*.swift
+  cp "$HERE/JarvisVoice/Info.plist" "$app/Contents/Info.plist"
+  # The signature is the identity macOS attaches its permissions (microphone,
+  # speech recognition, camera, screen recording, Accessibility) to. Signed with
+  # the local certificate (`jarvisctl signing-identity`), every build has the same
+  # identity, so those permissions survive updates. Ad hoc, each build is a new
+  # identity and macOS asks again.
+  if signing_identity_exists; then
+    codesign --force --sign "$SIGN_NAME" --identifier "$VOICE" "$app" >/dev/null \
+      || die "signing with “$SIGN_NAME” failed (if macOS asked to use the key, choose Always Allow and run this again)"
+    out "  built $app (signed with “$SIGN_NAME”)"
+  else
+    codesign --force --sign - --identifier "$VOICE" "$app" >/dev/null
+    out "  built $app (signed ad hoc — run '$0 signing-identity' once so macOS keeps permissions across updates)"
+  fi
+}
+
+# --------------------------------------------------------------------------
+# A stable code-signing identity (self-signed, in your login keychain)
+# --------------------------------------------------------------------------
+
+SIGN_NAME="${JARVIS_SIGN_IDENTITY:-Jarvis Voice Local Signing}"
+
+signing_identity_exists() {
+  security find-identity -p codesigning 2>/dev/null | grep -qF "\"$SIGN_NAME\""
+}
+
+create_signing_identity() {
+  if signing_identity_exists; then
+    out "“$SIGN_NAME” is already in your login keychain."
+    return
+  fi
+  # A certificate for code signing only, valid for 10 years, made and kept on this
+  # Mac. It is not trusted by anything else and signs nothing but Jarvis Voice.
+  local ssl=/usr/bin/openssl dir pw
+  [ -x "$ssl" ] || die "/usr/bin/openssl is missing"
+  dir="$(mktemp -d)"
+  chmod 700 "$dir"
+  pw="$("$ssl" rand -hex 16)" # protects the temporary bundle only; deleted with it
+  cat >"$dir/req.cnf" <<EOF
+[req]
+distinguished_name = dn
+x509_extensions = ext
+prompt = no
+[dn]
+CN = $SIGN_NAME
+O = Jarvis Voice on this Mac
+[ext]
+basicConstraints = critical, CA:FALSE
+keyUsage = critical, digitalSignature
+extendedKeyUsage = critical, codeSigning
+subjectKeyIdentifier = hash
+EOF
+  if ! "$ssl" req -x509 -newkey rsa:2048 -nodes -days 3650 -config "$dir/req.cnf" \
+         -keyout "$dir/key.pem" -out "$dir/cert.pem" >/dev/null 2>&1 \
+     || ! "$ssl" pkcs12 -export -inkey "$dir/key.pem" -in "$dir/cert.pem" -name "$SIGN_NAME" \
+         -out "$dir/identity.p12" -passout "pass:$pw" >/dev/null 2>&1 \
+     || ! security import "$dir/identity.p12" -k "$HOME/Library/Keychains/login.keychain-db" \
+         -f pkcs12 -P "$pw" -T /usr/bin/codesign >/dev/null; then
+    rm -rf "$dir"
+    die "could not create the signing identity"
+  fi
+  rm -rf "$dir"
+  out "Created “$SIGN_NAME” in your login keychain (only codesign may use its key)."
+  out "  Builds are now signed with it, so macOS keeps Jarvis Voice's permissions across updates."
+  out "  The next install asks for them one last time. Remove it any time with:"
+  out "  security delete-identity -c \"$SIGN_NAME\""
+}
+
+install_app() {
+  [ -d "$BUILT_APP" ] || build
+  mkdir -p "$HOME/Applications"
+  if [ -d "$APP" ] \
+    && cmp -s "$BUILT_APP/Contents/MacOS/JarvisVoice" "$APP/Contents/MacOS/JarvisVoice" \
+    && cmp -s "$BUILT_APP/Contents/Info.plist" "$APP/Contents/Info.plist"; then
+    out "  $APP is already up to date"
+    return
+  fi
+  rm -rf "$APP.new"
+  ditto "$BUILT_APP" "$APP.new"
+  rm -rf "$APP"
+  mv "$APP.new" "$APP"
+  out "  installed $APP"
+}
+
+write_agent_plist() {
+  local node path_env
+  node="$(node_bin)"
+  path_env="$(dirname "$node"):/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  cat >"$(plist_of "$AGENT")" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- JARVIS background agent: runs the bridge, the web interface and the local voice
+     engine for the macOS voice assistant. Installed by $(xml "$HERE")/jarvisctl. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$AGENT</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$(xml "$node")</string>
+    <string>$(xml "$REPO/core/supervisor.mjs")</string>
+  </array>
+  <key>WorkingDirectory</key><string>$(xml "$REPO")</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>ExitTimeOut</key><integer>20</integer>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>ProcessType</key><string>Standard</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>$(xml "$path_env")</string>
+    <key>LANG</key><string>en_US.UTF-8</string>
+  </dict>
+  <key>StandardOutPath</key><string>$(xml "$LOGS/agent.launchd.log")</string>
+  <key>StandardErrorPath</key><string>$(xml "$LOGS/agent.launchd.log")</string>
+  <key>AssociatedBundleIdentifiers</key><array><string>$VOICE</string></array>
+</dict>
+</plist>
+EOF
+}
+
+write_voice_plist() {
+  cat >"$(plist_of "$VOICE")" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Jarvis Voice: the menu bar app that listens for "Hey Jarvis".
+     Installed by $(xml "$HERE")/jarvisctl. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$VOICE</string>
+  <key>ProgramArguments</key>
+  <array><string>$(xml "$APP/Contents/MacOS/JarvisVoice")</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>ExitTimeOut</key><integer>10</integer>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>$(xml "$LOGS/voice.launchd.log")</string>
+  <key>StandardErrorPath</key><string>$(xml "$LOGS/voice.launchd.log")</string>
+  <key>AssociatedBundleIdentifiers</key><array><string>$VOICE</string></array>
+</dict>
+</plist>
+EOF
+}
+
+# --------------------------------------------------------------------------
+# launchd
+# --------------------------------------------------------------------------
+
+stray_voice_pid() {
+  # A copy of Jarvis Voice that macOS reopened itself (System Settings' "Quit & Reopen" after a
+  # permission change) runs outside launchd; launchd's own copy would then stand down.
+  local managed pid
+  managed="$(launchctl print "$DOMAIN/$VOICE" 2>/dev/null | awk '/^\tpid = /{print $3; exit}')"
+  for pid in $(pgrep -f "$APP/Contents/MacOS/JarvisVoice" 2>/dev/null); do
+    [ "$pid" = "$managed" ] || { printf '%s' "$pid"; return; }
+  done
+}
+
+stop_stray_voice() {
+  local pid i
+  pid="$(stray_voice_pid)"
+  [ -n "$pid" ] || return 0
+  [ -S "$SOCKET" ] && ctl quit >/dev/null 2>&1 || true
+  for i in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
+  kill -0 "$pid" 2>/dev/null && kill -TERM "$pid" 2>/dev/null # Jarvis Voice shuts down cleanly on SIGTERM
+  out "stopped a copy of Jarvis Voice that was running outside launchd (pid $pid)"
+}
+
+start_one() {
+  local label="$1" plist
+  plist="$(plist_of "$label")"
+  [ -f "$plist" ] || die "$label is not installed — run: $0 install"
+  [ "$label" = "$VOICE" ] && stop_stray_voice
+  if is_loaded "$label"; then
+    launchctl kickstart "$DOMAIN/$label" >/dev/null 2>&1 || true
+  else
+    launchctl bootstrap "$DOMAIN" "$plist"
+  fi
+  out "started $label"
+}
+
+stop_one() {
+  local label="$1" i
+  if is_loaded "$label"; then
+    launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
+    for i in $(seq 1 50); do is_loaded "$label" || break; sleep 0.5; done
+    out "stopped $label"
+  fi
+  [ "$label" = "$VOICE" ] && stop_stray_voice
+  return 0
+}
+
+restart_one() {
+  # A full stop (which waits until the process is gone) and a fresh start. kickstart -k would
+  # start the new copy while the old one is still exiting, and Jarvis Voice's single-instance
+  # check would then make the new copy stand down.
+  local label="$1"
+  stop_one "$label"
+  start_one "$label"
+}
+
+# --------------------------------------------------------------------------
+# Talking to the running assistant (a Unix socket only you can open)
+# --------------------------------------------------------------------------
+
+ctl() {
+  [ -S "$SOCKET" ] || die "the voice assistant is not running (start it with: $0 start)"
+  "$(node_bin)" -e '
+    const net = require("node:net")
+    const s = net.connect(process.argv[1], () => s.end(process.argv[2] + "\n"))
+    let reply = ""
+    s.setEncoding("utf8")
+    s.on("data", (d) => (reply += d))
+    s.on("end", () => { process.stdout.write(reply); process.exit(reply.startsWith("error") ? 1 : 0) })
+    s.on("error", (e) => { console.error("jarvisctl: " + e.message); process.exit(1) })
+    setTimeout(() => { console.error("jarvisctl: no answer from the assistant"); process.exit(1) }, 5000).unref()
+  ' "$SOCKET" "$*"
+}
+
+status() {
+  local label info state pid last
+  for label in "$AGENT" "$VOICE"; do
+    if is_loaded "$label"; then
+      info="$(launchctl print "$DOMAIN/$label" 2>/dev/null)"
+      state="$(awk -F' = ' '$1 ~ /^[[:space:]]+state$/ {print $2; exit}' <<<"$info")"
+      pid="$(awk -F' = ' '$1 ~ /^[[:space:]]+pid$/ {print $2; exit}' <<<"$info")"
+      last="$(awk -F' = ' '$1 ~ /last exit code/ {print $2; exit}' <<<"$info")"
+      printf '%-20s %s%s%s\n' "$label" "${state:-loaded}" "${pid:+ (pid $pid)}" "${last:+ — last exit: $last}"
+    elif [ -f "$(plist_of "$label")" ]; then
+      printf '%-20s %s\n' "$label" "installed, not running (starts at next login, or: $0 start)"
+    else
+      printf '%-20s %s\n' "$label" "not installed"
+    fi
+  done
+  if [ -f "$SUPPORT/agent-status.json" ] && is_loaded "$AGENT"; then
+    out ""
+    out "Services kept running by the agent:"
+    "$(node_bin)" -e '
+      const s = require(process.argv[1])
+      const what = { running: "running (started by the agent)", external: "running (reused — started outside the agent)",
+                     starting: "starting", backoff: "restarting after a failure", stopped: "stopped" }
+      for (const [name, v] of Object.entries(s.services))
+        console.log(`  ${name.padEnd(13)} ${(what[v.mode] ?? v.mode).padEnd(46)} port ${v.port}${v.pid ? `, pid ${v.pid}` : ""}${v.restarts ? `, ${v.restarts} restart(s)` : ""}`)
+    ' "$SUPPORT/agent-status.json"
+  fi
+  if [ -S "$SOCKET" ]; then
+    out ""
+    out "Voice assistant:"
+    ctl status || true
+  fi
+}
+
+doctor() {
+  local ok=0
+  check() { if eval "$2" >/dev/null 2>&1; then printf '  ok    %s\n' "$1"; else printf '  FAIL  %s\n' "$1"; ok=1; fi; }
+  out "Checking the JARVIS voice assistant…"
+  check "bridge answers on 127.0.0.1:8787" "curl -fsS -m 3 http://127.0.0.1:8787/health | grep -q '\"ok\":true'"
+  check "web interface answers on localhost:5173" "curl -fsS -m 3 -o /dev/null http://localhost:5173/"
+  check "Kokoro voice engine is ready on 127.0.0.1:8790" "curl -fsS -m 3 http://127.0.0.1:8790/health | grep -q '\"ready\":true'"
+  if [ -f "$SUPPORT/agent-status.json" ] && grep -A1 '"bridge"' "$SUPPORT/agent-status.json" | grep -q '"external"'; then
+    printf '  note  %s\n        %s\n' "the bridge in use was started outside the agent (npm start), which listens on every network interface;" \
+      "the agent's own copy — used from your next login — listens on 127.0.0.1 only"
+  else
+    check "bridge is not reachable from the network" "! lsof -nP -iTCP:8787 -sTCP:LISTEN | grep -q '\\*:8787'"
+  fi
+  check "menu bar app is running" "test -S '$SOCKET' && ctl ping | grep -q pong"
+  check "microphone permission granted" "ctl status | grep -q '\"microphonePermission\" : \"granted\"'"
+  check "listening for the wake phrase" "ctl status | grep -qE '\"state\" : \"(idle|listening|followUp|thinking|speaking)\"'"
+  # Claude Code finds its keychain login through USER, as launchd provides it.
+  check "Claude Code is signed in" "env -i HOME=\"\$HOME\" USER=\"\$USER\" LOGNAME=\"\$USER\" PATH=\"\$PATH\" claude auth status | grep -q '\"loggedIn\": true'"
+  check "permission broker is on for Jarvis Voice" "grep -q '^JARVIS_PERMISSIONS=1' '$SUPPORT/agent.env'"
+  check "signed with a stable identity (permissions survive updates)" "codesign -d -r- '$APP' 2>&1 | grep -qE 'certificate (leaf|root)'"
+  if [ -S "$SOCKET" ]; then
+    out "  macOS permissions for Jarvis Voice (only you can change these, in System Settings):"
+    ctl status | awk -F'"' '/Permission"/ {printf "        %-28s %s\n", $2, $4}'
+  fi
+  return $ok
+}
+
+uninstall() {
+  stop_one "$VOICE"
+  stop_one "$AGENT"
+  rm -f "$(plist_of "$VOICE")" "$(plist_of "$AGENT")"
+  rm -rf "$APP"
+  out "Removed both LaunchAgents and $APP."
+  if [ "${1:-}" = "--purge" ]; then
+    rm -rf "$SUPPORT" "$LOGS" "$CACHE"
+    tccutil reset Microphone "$VOICE" >/dev/null 2>&1 || true
+    tccutil reset SpeechRecognition "$VOICE" >/dev/null 2>&1 || true
+    out "Also removed its settings, logs, the voice model cache, and Jarvis Voice's microphone/speech permissions."
+  else
+    out "Kept settings ($SUPPORT), logs ($LOGS) and the voice model cache ($CACHE) — add --purge to remove them."
+  fi
+  out "The project itself is untouched; npm start works exactly as before."
+}
+
+install() {
+  out "Installing the JARVIS background voice assistant"
+  [ -d "$REPO/node_modules" ] || die "run 'npm install' in $REPO first"
+  mkdir -p "$LAUNCH_AGENTS" "$LOGS" "$SUPPORT"
+  build
+  stop_one "$VOICE"
+  install_app
+  write_agent_plist
+  write_voice_plist
+  plutil -lint -s "$(plist_of "$AGENT")" "$(plist_of "$VOICE")" || die "a generated LaunchAgent is invalid"
+  stop_one "$AGENT" # so a reinstall picks up the latest agent code
+  start_one "$AGENT"
+  start_one "$VOICE"
+  out ""
+  out "Done. Jarvis now starts by itself every time you log in."
+  out "  • The first launch asks for Microphone and Speech Recognition access — click Allow."
+  out "  • Look for the waveform icon in the menu bar, then say “Hey Jarvis”."
+  out "  • $0 status   shows what is running."
+}
+
+case "${1:-help}" in
+  install) install ;;
+  build) build ;;
+  signing-identity) create_signing_identity ;;
+  uninstall) shift; uninstall "${1:-}" ;;
+  start) for l in $(labels_for "${2:-all}"); do start_one "$l"; done ;;
+  stop) for l in $(labels_for "${2:-all}" | awk '{for (i = NF; i > 0; i--) printf "%s ", $i}'); do stop_one "$l"; done ;;
+  restart) for l in $(labels_for "${2:-all}"); do restart_one "$l"; done ;;
+  status) status ;;
+  doctor) doctor ;;
+  logs) mkdir -p "$LOGS"; cd "$LOGS"; tail -n 30 -F agent.log bridge.log face.log voice-engine.log voice.log 2>/dev/null ;;
+  mute | unmute | toggle | talk | reload | ping | devices) ctl "$1" ;;
+  tasks) ctl "tasks ${2:-}" ;;
+  cancel) [ -n "${2:-}" ] || die "usage: $0 cancel <task number|all>"; ctl "cancel $2" ;;
+  permissions)
+    out "Jarvis's own permissions (~/Library/Application Support/JarvisVoice/permissions.json):"
+    if [ -f "$SUPPORT/permissions.json" ]; then sed 's/^/  /' "$SUPPORT/permissions.json"; else out "  (none set yet — everything is at its default: ask first, except opening/closing apps and web search)"; fi
+    if [ -S "$SOCKET" ]; then out ""; out "What Jarvis Voice reports:"; ctl permissions | fold -s -w 110 | sed 's/^/  /'; fi
+    if [ -f "$SUPPORT/permission-history.jsonl" ]; then out ""; out "Recent decisions and actions:"; tail -n 15 "$SUPPORT/permission-history.jsonl" | sed 's/^/  /'; fi ;;
+  stop-speaking) ctl stop ;;
+  say | ask | answer) cmd="$1"; shift; [ $# -gt 0 ] || die "usage: $0 $cmd \"text\""; ctl "$cmd $*" ;;
+  help | -h | --help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) die "unknown command '$1' — see: $0 help" ;;
+esac

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Jarvis Setup
+Comment=Set up the "Hey Jarvis" voice assistant for your account
+Exec=sh -c "jarvis setup && jarvis install; echo; echo Press Enter to close.; read x"
+Terminal=true
+Icon=audio-input-microphone
+Categories=Utility;

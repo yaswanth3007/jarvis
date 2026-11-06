@@ -1,8 +1,8 @@
 {
   "name": "jarvis",
   "private": true,
-  "version": "0.0.0",
-  "description": "A browser voice assistant with an Iron Man holographic interface, driven by Claude Code through a small Node bridge.",
+  "version": "0.5.0",
+  "description": "JARVIS: a voice assistant driven by Claude Code — a holographic web face plus always-on \"Hey Jarvis\" assistants for macOS, Windows and Linux.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -16,7 +16,12 @@
     "preview": "vite preview",
     "bridge": "node bridge/server.mjs",
     "bridge:writes": "JARVIS_ALLOW_WRITES=1 node bridge/server.mjs",
-    "setup": "node scripts/setup.mjs"
+    "setup": "node scripts/setup.mjs",
+    "jarvis": "node bin/jarvis.mjs",
+    "test": "node --test --test-concurrency=1 tests/",
+    "test:swift": "node tests/run-swift-tests.mjs",
+    "test:all": "npm test && npm run test:swift",
+    "package": "node packaging/package.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.220",
@@ -49,5 +54,12 @@
     "tsx": "^4.23.1",
     "typescript": "~6.0.2",
     "vite": "^8.2.0"
+  },
+  "optionalDependencies": {
+    "@picovoice/pvrecorder-node": "1.2.9",
+    "sherpa-onnx-node": "2.0.1"
+  },
+  "bin": {
+    "jarvis": "bin/jarvis.mjs"
   }
 }

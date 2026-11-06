@@ -1,0 +1,152 @@
+# Builds, tests and packages Jarvis on every supported OS and architecture.
+# Nothing here publishes anything: artifacts are kept on the workflow run only.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-package:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macOS arm64,   runner: macos-26,         os: macos,   arch: arm64 }
+          - { name: macOS x64,     runner: macos-26-intel,   os: macos,   arch: x64 }
+          - { name: Windows x64,   runner: windows-2025,     os: windows, arch: x64 }
+          - { name: Windows ARM64, runner: windows-11-arm,   os: windows, arch: arm64 }
+          - { name: Linux x64,     runner: ubuntu-24.04,     os: linux,   arch: x64 }
+          - { name: Linux ARM64,   runner: ubuntu-24.04-arm, os: linux,   arch: arm64 }
+    env:
+      CI_CACHE: ${{ github.workspace }}/.ci-cache
+      JARVIS_TEST_MODELS: ${{ github.workspace }}/.ci-cache/models
+      JARVIS_TTS_CACHE: ${{ github.workspace }}/.ci-cache/kokoro
+      JARVIS_REQUIRE_SPEECH: '1'
+      JARVIS_TEST_TTS: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Report the machine
+        shell: bash
+        run: |
+          node -e "console.log(process.platform, process.arch, process.version, require('os').cpus()[0]?.model, require('os').cpus().length + ' cpus')"
+          [ "${{ matrix.os }}" = macos ] && sw_vers && swift --version || true
+
+      - name: Linux desktop and sound packages
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends xvfb x11-utils dbus-x11 at-spi2-core python3-gi gir1.2-atspi-2.0 \
+            gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1 openbox wmctrl xdotool imagemagick scrot pulseaudio pulseaudio-utils \
+            alsa-utils espeak-ng bzip2 xdg-utils
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Restore speech models
+        uses: actions/cache@v4
+        with:
+          path: .ci-cache/models
+          key: speech-models-${{ runner.os }}-${{ hashFiles('core/models.mjs') }}
+
+      - name: Restore the Kokoro voice model
+        uses: actions/cache@v4
+        with:
+          path: .ci-cache/kokoro
+          key: kokoro-q8-${{ runner.os }}-v1
+
+      - name: Download and verify the speech models
+        run: node -e "import('./core/models.mjs').then(m => m.ensureModels({ root: process.env.JARVIS_TEST_MODELS })).then(s => { console.log(JSON.stringify({kws: s.kws, vad: s.vad, asr: s.asr})); if (!s.all) process.exit(1) })"
+
+      - name: Capabilities of this runner
+        run: node bin/jarvis.mjs capabilities
+
+      - name: Tests (macOS)
+        if: matrix.os == 'macos'
+        run: npm test
+
+      - name: Swift tests and app build (macOS)
+        if: matrix.os == 'macos'
+        run: |
+          npm run test:swift
+          macos/jarvisctl build
+          file macos/build/JarvisVoice.app/Contents/MacOS/JarvisVoice
+
+      - name: Tests (Windows)
+        if: matrix.os == 'windows'
+        env:
+          JARVIS_E2E_DESKTOP: '1'
+        run: npm test
+
+      - name: Tests (Linux, in a headless desktop session with sound)
+        if: matrix.os == 'linux'
+        env:
+          JARVIS_E2E_DESKTOP: '1'
+          JARVIS_E2E_AUDIO: '1'
+        run: packaging/ci/linux-session.sh npm test
+
+      - name: NSIS for the Windows installer
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) { choco install nsis -y --no-progress }
+          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Package
+        run: npm run package -- --out out
+
+      - name: Smoke-test the package
+        shell: bash
+        run: |
+          PKGDIR=$(node -e "const p=require('./package.json');console.log('out/jarvis-'+p.version+'-'+{darwin:'macos',win32:'windows',linux:'linux'}[process.platform]+'-'+require('os').arch())")
+          if [ "${{ matrix.os }}" = linux ]; then packaging/ci/linux-session.sh node packaging/ci/smoke-package.mjs "$PKGDIR"; else node packaging/ci/smoke-package.mjs "$PKGDIR"; fi
+
+      - name: Install the .deb and run it (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get install -y -q ./out/jarvis_*.deb
+          jarvis version
+          jarvis capabilities
+          sudo apt-get remove -y -q jarvis
+
+      - name: Install, run at login and uninstall, as a user would
+        shell: bash
+        env:
+          CI: '1'
+        run: |
+          if [ "${{ matrix.os }}" = linux ]; then
+            sudo loginctl enable-linger "$USER"
+            export XDG_RUNTIME_DIR=/run/user/$(id -u) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus
+            for i in $(seq 30); do [ -S "$XDG_RUNTIME_DIR/bus" ] && break; sleep 1; done
+          fi
+          node packaging/ci/install-check.mjs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            out/*.tar.gz
+            out/*.zip
+            out/*.deb
+            out/*-setup.exe
+            out/SHA256SUMS-*.txt
+          if-no-files-found: error
+          retention-days: 30

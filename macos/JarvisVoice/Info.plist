@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>local.jarvis.voice</string>
+	<key>CFBundleName</key>
+	<string>JarvisVoice</string>
+	<key>CFBundleDisplayName</key>
+	<string>Jarvis Voice</string>
+	<key>CFBundleExecutable</key>
+	<string>JarvisVoice</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Jarvis listens for “Hey Jarvis”. The wake word and your words are recognised on this Mac; only the request you make after the wake word is sent on to Jarvis.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Jarvis uses Apple’s on-device speech recognition to hear its wake word and your requests. Audio is not sent to Apple.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Jarvis uses the camera only when you ask it to look at something. One picture is taken (or a few seconds for “watch”), sent to Claude for that request, and never saved. The camera turns off straight away.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Jarvis controls an app only when you ask it to — for example running a command you asked for in Terminal, closing Finder windows, or closing its own interface tab in your browser.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

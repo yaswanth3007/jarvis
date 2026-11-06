@@ -1,0 +1,4 @@
+#!/bin/sh
+# /usr/bin/jarvis from the .deb: runs Jarvis's CLI with the Node.js on PATH (20 or newer).
+command -v node >/dev/null 2>&1 || { echo "jarvis: Node.js 20 or newer is needed (https://nodejs.org)" >&2; exit 1; }
+exec node /opt/jarvis/bin/jarvis.mjs "$@"

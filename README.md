@@ -15,6 +15,43 @@ listens through the browser's own speech, and everything still works.
 
 ---
 
+## Always on: "Hey Jarvis" on macOS, Windows and Linux
+
+Besides the browser face, Jarvis can run as an always-on voice assistant that starts at login,
+listens for "Hey Jarvis", and opens, reads and operates your apps — only when you ask, with every
+sensitive action confirmed aloud and every permission yours to grant or revoke ("stop controlling
+applications"). It shares one brain, one permission broker and one command language on every
+platform, and uses each operating system's own APIs:
+
+| | macOS | Windows | Linux |
+|---|---|---|---|
+| Client | native menu bar app (Swift) | Node.js assistant + notification-area icon | Node.js assistant + status icon |
+| Wake word & speech | Apple Speech, on device | sherpa-onnx, offline | sherpa-onnx, offline |
+| Apps & windows | NSWorkspace, Accessibility | Start menu, UI Automation | .desktop entries, AT-SPI |
+| Starts at login | launchd | per-user Run entry | systemd --user |
+| Guide | [docs/setup-macos.md](docs/setup-macos.md) | [docs/setup-windows.md](docs/setup-windows.md) | [docs/setup-linux.md](docs/setup-linux.md) |
+
+```bash
+npm install
+```
+
+```bash
+node bin/jarvis.mjs setup
+```
+
+```bash
+node bin/jarvis.mjs install
+```
+
+(on macOS `jarvis` hands over to `macos/jarvisctl`). What was built and tested on which OS and
+architecture is in [docs/validation.md](docs/validation.md); what does not work is in
+[docs/limitations.md](docs/limitations.md). More: [architecture](docs/architecture.md),
+[permissions](docs/permissions.md), [troubleshooting](docs/troubleshooting.md),
+[development](docs/development.md), [building packages](docs/build.md),
+[releasing](docs/release.md), [uninstalling](docs/uninstall.md).
+
+---
+
 ## Requirements
 
 **In one line:** a Claude Code subscription, plus two free things every computer

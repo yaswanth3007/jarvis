@@ -21,6 +21,9 @@ import { displayServer } from './panels.mjs'
 import { uiServer } from './ui.mjs'
 import { chromeAvailable, chromeServer } from './chrome.mjs'
 import { visionServer } from './vision.mjs'
+import { desktopPrompt, desktopServer, macServer, MAC_PROMPT, VOICE_ONLY_PROMPT } from './mac.mjs'
+import { permissionHook } from './permissions.mjs'
+import { KEY_FILE, loadKey, proveIdentity, verifyClientSignature } from './voice-auth.mjs'
 import { homedir, tmpdir } from 'node:os'
 import { readFileSync, realpathSync } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'
@@ -99,6 +102,24 @@ function originAllowed(origin) {
 const ALLOW_WRITES = process.env.JARVIS_ALLOW_WRITES === '1'
 
 /**
+ * The permission broker for Jarvis Voice, the macOS menu bar app (see
+ * permissions.mjs). Off unless JARVIS_PERMISSIONS=1, which the background agent
+ * sets. When on, effectful tools are offered only to the client that can ask the
+ * user out loud first — Jarvis Voice — and every one of its tool calls is
+ * checked, so ALLOW_WRITES then means "allowed with the user's say-so". The web
+ * interface stays read-only. When off, nothing here changes.
+ */
+const PERMISSIONS = process.env.JARVIS_PERMISSIONS === '1'
+
+/**
+ * How Jarvis Voice proves it is Jarvis Voice (see voice-auth.mjs). Claiming to be it
+ * (?client=jarvis-voice-mac) is not enough — that is just a string any local process
+ * can send — so the connection must carry a fresh signature made with the per-install
+ * key only this user can read. Without the key, no connection is treated as Jarvis Voice.
+ */
+const VOICE_KEY = loadKey()
+
+/**
  * The orchestrator model. Override with JARVIS_MODEL to trade quality for pace
  * — claude-sonnet-5 is noticeably snappier on camera if Opus feels slow.
  */
@@ -137,7 +158,7 @@ const READ_ONLY_BUILTINS = new Set([
   'BashOutput', 'TaskOutput',
 ])
 const WRITE_BUILTINS = new Set([
-  'Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit',
+  'Bash', 'PowerShell', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit',
   'KillShell', 'TaskStop',
 ])
 
@@ -252,9 +273,9 @@ const VETO_EXEMPT = new Set([
   'openrouter__send-feedback',
 ])
 
-function decideTool(name) {
+function decideTool(name, allowWrites = ALLOW_WRITES) {
   if (READ_ONLY_BUILTINS.has(name)) return true
-  if (WRITE_BUILTINS.has(name)) return ALLOW_WRITES
+  if (WRITE_BUILTINS.has(name)) return allowWrites
 
   const server = mcpServerOf(name)
   if (server) {
@@ -279,15 +300,19 @@ function decideTool(name) {
     // indicator the user can see for as long as it is live.
     if (server === 'jarvis_eyes') return true
 
+    // The Mac tools exist only on Jarvis Voice connections, where the
+    // permission broker has already decided every call before it gets here.
+    if (server === 'jarvis_mac' || server === 'jarvis_desktop') return true
+
     const tool = mcpToolOf(name)
     if (EFFECTFUL_VERB.test(tool) && !VETO_EXEMPT.has(`${server}__${tool}`)) {
-      return ALLOW_WRITES
+      return allowWrites
     }
     // The session tools this bridge is developed inside count as read-only too.
     if (READ_ONLY_MCP.has(server) || server.startsWith('ccd_session')) return true
-    return READ_VERB.test(tool) ? true : ALLOW_WRITES
+    return READ_VERB.test(tool) ? true : allowWrites
   }
-  return ALLOW_WRITES
+  return allowWrites
 }
 
 const SYSTEM_PROMPT = `You are JARVIS. You are speaking out loud to one person.
@@ -676,15 +701,19 @@ const handleRequest = async (req, res) => {
     return res.end()
   }
 
-  if (req.method === 'GET' && req.url === '/health') {
+  if (req.method === 'GET' && (req.url === '/health' || req.url?.startsWith('/health?'))) {
     // The browser reads this once at boot to decide which voice engine to use.
     // Both premium paths ride the same ElevenLabs key, so both flags track it:
     // with a key the app transcribes with Scribe and speaks with ElevenLabs;
     // without one it falls back to the browser's own recogniser and voice, so a
     // student with nothing configured still has a working assistant.
     const eleven = Boolean(elevenKey())
+    // A nonce from Jarvis Voice or the agent: answering it proves this is the
+    // user's own bridge and not something else holding the port.
+    const nonce = new URL(req.url, 'http://x').searchParams.get('nonce')
+    const proof = nonce ? proveIdentity(VOICE_KEY, 'jarvis-bridge-http', nonce) : null
     res.writeHead(200, { ...cors, 'content-type': 'application/json' })
-    return res.end(JSON.stringify({ ok: true, tts: eleven, stt: eleven }))
+    return res.end(JSON.stringify({ ok: true, tts: eleven, stt: eleven, ...(proof ? { proof } : {}) }))
   }
 
   // Serve local image files to the page. Screenshots and generated art land on
@@ -871,10 +900,12 @@ const handleRequest = async (req, res) => {
 
       // Pipe it through rather than buffering. Waiting for the whole file here
       // would throw away everything the streaming endpoint just bought us.
+      const ttsProof = proveIdentity(VOICE_KEY, 'jarvis-bridge-tts', req.headers['x-jarvis-nonce'])
       res.writeHead(200, {
         ...cors,
         'content-type': 'audio/mpeg',
         'cache-control': 'no-cache',
+        ...(ttsProof ? { 'x-jarvis-proof': ttsProof } : {}),
       })
       for await (const chunk of upstream.body) res.write(Buffer.from(chunk))
       return res.end()
@@ -995,6 +1026,29 @@ const wss = new WebSocketServer({
       )
       return done(false, 403, 'Forbidden')
     }
+    // A connection that claims to be Jarvis Voice must prove it with a fresh
+    // signature (voice-auth.mjs); otherwise it is refused outright rather than
+    // quietly treated as something it says it is.
+    const params = new URL(req.url ?? '/', 'http://x').searchParams
+    // jarvis-voice-mac is the macOS menu bar app; jarvis-voice-windows / -linux the
+    // voice assistant in client/. All three prove themselves the same way.
+    const voiceOS = /^jarvis-voice-(mac|windows|linux)$/.exec(params.get('client') ?? '')?.[1] ?? null
+    const claims = params.has('client') && params.get('client')?.startsWith('jarvis-voice')
+    const signature = req.headers['x-jarvis-voice-auth']
+    if (claims || signature) {
+      const nonce = verifyClientSignature(VOICE_KEY, Array.isArray(signature) ? signature[0] : signature)
+      if (!nonce) {
+        console.warn(
+          `[jarvis] rejected a connection claiming to be Jarvis Voice without a valid signature` +
+            (VOICE_KEY ? '' : ` (no key at ${KEY_FILE})`),
+        )
+        return done(false, 401, 'Unauthorized')
+      }
+      if (!voiceOS) return done(false, 400, 'Bad Request')
+      req.jarvisVoiceNonce = nonce
+      req.jarvisVoiceOS = voiceOS
+      req.jarvisVoiceCaps = voiceOS === 'mac' ? null : parseCaps(params.get('caps'))
+    }
     done(true)
   },
 })
@@ -1039,13 +1093,55 @@ const RESULT_FAILURES = {
   default: 'The turn ended without an answer.',
 }
 
-wss.on('connection', (socket) => {
-  console.log('[jarvis] client connected')
+/**
+ * What a Windows or Linux voice assistant says its computer can do (core/platform.mjs),
+ * so only tools it can carry out are offered and the rest are explained honestly.
+ * base64url JSON {available: string[], missing: {capability: reason}}; anything odd is dropped.
+ */
+function parseCaps(raw) {
+  const out = { available: [], missing: {} }
+  if (!raw || raw.length > 8000) return out
+  try {
+    const v = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'))
+    const key = /^[a-z][a-z.]{1,30}$/
+    if (Array.isArray(v?.available)) out.available = v.available.filter((k) => typeof k === 'string' && key.test(k)).slice(0, 40)
+    if (v?.missing && typeof v.missing === 'object') {
+      for (const [k, why] of Object.entries(v.missing).slice(0, 40)) {
+        if (key.test(k) && typeof why === 'string') out.missing[k] = why.replace(/[\r\n[\]]/g, ' ').slice(0, 240)
+      }
+    }
+  } catch {
+    /* no capabilities: no device tools */
+  }
+  return out
+}
+
+wss.on('connection', (socket, req) => {
+  // Which client this is. Jarvis Voice, the macOS menu bar app, is the one that
+  // proved it in the handshake (verifyClient); anything else is the web
+  // interface, which behaves exactly as it always has.
+  const voiceNonce = req?.jarvisVoiceNonce ?? null
+  /** Any Jarvis Voice: the Mac app, or the Windows/Linux assistant. Same broker, same rules. */
+  const isVoice = Boolean(voiceNonce)
+  const isMac = isVoice && req?.jarvisVoiceOS === 'mac'
+  const desktop = isVoice && !isMac ? { os: req.jarvisVoiceOS, ...(req.jarvisVoiceCaps ?? { available: [], missing: {} }) } : null
+  const contextTag = isMac ? 'Mac' : 'PC'
+  const allowWrites = PERMISSIONS ? isVoice && ALLOW_WRITES : ALLOW_WRITES
+  /** The user's latest request, for the broker's "did they ask for this?" check. */
+  let lastAsk = ''
+  /** The "[Mac: …]" line Jarvis Voice sent with it: which app is in front. */
+  let lastContext = ''
+  console.log(`[jarvis] client connected${isVoice ? ` (Jarvis Voice${isMac ? '' : `, ${desktop.os}`})` : ''}`)
 
   // Answer the HUD straight away rather than making it wait for the agent's
-  // first turn. Refined later by the real init message.
+  // first turn. Refined later by the real init message. To Jarvis Voice it also
+  // proves this is the user's own bridge: it acts on nothing until it sees this.
   socket.send(
-    JSON.stringify({ type: 'ready', servers: Object.keys(MCP_SERVERS) }),
+    JSON.stringify({
+      type: 'ready',
+      servers: Object.keys(MCP_SERVERS),
+      ...(isVoice ? { proof: proveIdentity(VOICE_KEY, 'jarvis-bridge', voiceNonce) } : {}),
+    }),
   )
 
   /** Resolves the pending user message into the SDK's input generator. */
@@ -1179,7 +1275,7 @@ wss.on('connection', (socket) => {
     // interface is the interface talking about itself, not work being done for
     // the user, and the badge would be describing the very thing they can see.
     if (name.startsWith('mcp__jarvis_ui__')) return
-    if (decideTool(name)) return sendTurn({ type: 'tool', name })
+    if (decideTool(name, allowWrites)) return sendTurn({ type: 'tool', name })
     if (id) heldTools.set(id, name)
   }
 
@@ -1211,15 +1307,57 @@ wss.on('connection', (socket) => {
         // The user's own Chrome, over the extension's native-host socket. It
         // holds no per-connection state, but it is built here with the rest so
         // the write gate is read once, at the same point as everything else.
-        jarvis_chrome: chromeServer({ allowWrites: ALLOW_WRITES }),
+        jarvis_chrome: chromeServer({ allowWrites }),
         // The camera, which unlike everything else here has to ask and wait.
-        jarvis_eyes: visionServer(ask),
+        // On the Mac the first capture can also wait for macOS's own camera prompt
+        // (and Jarvis Voice's guided permission flow), so it gets longer.
+        jarvis_eyes: visionServer(
+          isVoice && PERMISSIONS
+            ? (kind, args, timeoutMs) => ask(kind, args, Math.max(timeoutMs ?? 20_000, 120_000))
+            : ask,
+        ),
+        // The Mac itself — apps, windows, the screen — carried out by Jarvis
+        // Voice. Only that client can execute these, so only it gets them.
+        // Never without the broker: these act on the Mac, and only the broker
+        // asks the user first.
+        ...(isMac && PERMISSIONS ? { jarvis_mac: macServer(ask) } : {}),
+        // The same for Windows and Linux, limited to what that computer can do.
+        ...(desktop && PERMISSIONS ? { jarvis_desktop: desktopServer(ask, desktop) } : {}),
       },
       // A plain system prompt, not the claude_code preset. The preset is
       // tuned for a coding agent — verbose, file-oriented, and a large chunk
       // of input tokens on every turn. Replacing it makes the persona stick,
       // keeps answers short enough to speak, and cuts cost per turn.
-      systemPrompt: SYSTEM_PROMPT,
+      // Jarvis Voice adds its own rules: voice only, act only when asked, and
+      // treat everything read from the Mac or the web as data.
+      systemPrompt: isMac
+        ? `${SYSTEM_PROMPT}\n\n${PERMISSIONS ? MAC_PROMPT : VOICE_ONLY_PROMPT}`
+        : desktop
+          ? `${SYSTEM_PROMPT}\n\n${PERMISSIONS ? desktopPrompt(desktop) : VOICE_ONLY_PROMPT.replace("ON THE USER'S MAC", "ON THE USER'S COMPUTER").replace("the Mac's background", "the computer's background")}`
+          : SYSTEM_PROMPT,
+      // Every tool call from Jarvis Voice goes past the permission broker
+      // first. Hooks see the calls the CLI would otherwise settle on its own.
+      // The timeout is longer than the broker's own 90-second wait for an
+      // answer, so it always decides rather than timing out.
+      ...(isVoice && PERMISSIONS
+        ? {
+            hooks: {
+              PreToolUse: [
+                {
+                  hooks: [
+                    permissionHook({
+                      ask,
+                      userText: () => lastAsk,
+                      context: () => lastContext,
+                      connection: `${isMac ? 'mac' : desktop.os}-${Date.now().toString(36)}`,
+                    }),
+                  ],
+                  timeout: 180,
+                },
+              ],
+            },
+          }
+        : {}),
       // Run from the home directory so project-scoped MCP servers don't shadow
       // the global ones, and so file tools have a sane root.
       cwd: homedir(),
@@ -1262,7 +1400,7 @@ wss.on('connection', (socket) => {
       // something with a consequence, like a `touch`. So a deny here is
       // reliable; an absence of a call here is not proof nothing ran.
       canUseTool: async (toolName) => {
-        const ok = decideTool(toolName)
+        const ok = decideTool(toolName, allowWrites)
         console.log(`[jarvis] tool ${toolName} -> ${ok ? 'allow' : 'deny'}`)
         return ok
           ? { behavior: 'allow' }
@@ -1417,8 +1555,23 @@ wss.on('connection', (socket) => {
        * Waiting costs nothing when nothing is interrupting — the chain is an
        * already-resolved promise — and removes the cross-talk when there is.
        */
-      const text = msg.text
+      let text = msg.text
       const id = typeof msg.id === 'string' ? msg.id : null
+      if (isVoice && typeof msg.request === 'string') {
+        // Jarvis Voice sends the user's own words and the Mac's context apart. The
+        // context holds a window title — someone else's text (a page title, an email
+        // subject) — so it is never read as what the user asked for.
+        const context = typeof msg.context === 'string'
+          ? msg.context.replace(/[[\]\r\n\p{Zl}\p{Zp}]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 400)
+          : ''
+        lastAsk = msg.request
+        lastContext = context ? `[${contextTag}: ${context}]` : ''
+        text = lastContext ? `${lastContext}\n${msg.request}` : msg.request
+      } else {
+        // Context lines ("[Mac: …]") are not the user's words: drop whole lines.
+        lastAsk = text.split('\n').filter((line) => !/^\s*\[(Mac|PC):/.test(line)).join('\n')
+        lastContext = (text.match(/^\s*\[(Mac|PC):.*$/m) ?? [''])[0]
+      }
       void settling.then(() => {
         answering = id
         if (deliver) {

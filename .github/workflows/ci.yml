@@ -52,14 +52,16 @@ jobs:
 
       - name: Linux desktop and sound packages
         if: matrix.os == 'linux'
+        timeout-minutes: 15
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends xvfb x11-utils dbus-x11 at-spi2-core python3-gi gir1.2-atspi-2.0 \
+          sudo apt-get -o Acquire::Retries=3 update -q
+          sudo apt-get -o Acquire::Retries=3 install -y -q --no-install-recommends xvfb x11-utils dbus-x11 at-spi2-core python3-gi gir1.2-atspi-2.0 \
             gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1 openbox wmctrl xdotool imagemagick scrot pulseaudio pulseaudio-utils \
             alsa-utils espeak-ng bzip2 xdg-utils
 
       - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        # onnxruntime-node would download its CUDA provider on Linux x64; Jarvis runs it on the CPU.
+        run: npm ci --no-audit --no-fund --onnxruntime-node-install-cuda=skip
 
       - name: Restore speech models
         uses: actions/cache@v4

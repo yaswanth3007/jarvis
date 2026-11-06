@@ -25,6 +25,10 @@ public static class JarvisWin {
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool attach);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
   public static string Title(IntPtr h) { var s = new StringBuilder(512); GetWindowText(h, s, 512); return s.ToString(); }
 }
@@ -88,10 +92,29 @@ function Get-Front {
   return [pscustomobject]@{ pid = [int]$procId; name = $name; description = $desc; title = [JarvisWin]::Title($h); handle = [int64]$h }
 }
 
+# Brings the window the user named to the front, with Windows' documented focus APIs: UI
+# Automation focus first; if Windows keeps another window in front (it restricts background
+# programs), SetForegroundWindow while attached to the foreground window's input queue. Windows
+# still never lets a normal program act on elevated apps.
 function Focus-Window($win) {
   $h = [IntPtr][int64]$win.handle
   if ([JarvisWin]::IsIconic($h)) { [void][JarvisWin]::ShowWindowAsync($h, 9) } # SW_RESTORE
-  try { $AE::FromHandle($h).SetFocus() } catch { try { [Microsoft.VisualBasic.Interaction]::AppActivate([int]$win.pid) } catch { } }
+  try { $AE::FromHandle($h).SetFocus() } catch { }
+  Start-Sleep -Milliseconds 120
+  $front = Get-Front
+  if ($null -ne $front -and $front.pid -eq $win.pid) { return $true }
+  $fg = [JarvisWin]::GetForegroundWindow()
+  [uint32]$fgPid = 0
+  $fgThread = [JarvisWin]::GetWindowThreadProcessId($fg, [ref]$fgPid)
+  $me = [JarvisWin]::GetCurrentThreadId()
+  $attached = $false
+  if ($fgThread -ne 0 -and $fgThread -ne $me) { $attached = [JarvisWin]::AttachThreadInput($me, $fgThread, $true) }
+  try {
+    [void][JarvisWin]::BringWindowToTop($h)
+    [void][JarvisWin]::SetForegroundWindow($h)
+  } finally {
+    if ($attached) { [void][JarvisWin]::AttachThreadInput($me, $fgThread, $false) }
+  }
   Start-Sleep -Milliseconds 150
   $front = Get-Front
   return ($null -ne $front -and $front.pid -eq $win.pid)
@@ -302,12 +325,26 @@ $handlers = @{
   }
   'type' = { param($a)
     $w = Require-Window ([string]$a.name)
-    if (-not (Focus-Window $w)) { throw "$($a.name) could not be brought to the front, so nothing was typed." }
+    $focused = Focus-Window $w
     $root = $AE::FromHandle([IntPtr][int64]$w.handle)
     $target = $null
     if ($a.field) { $target = Find-Element $root ([string]$a.field) 'edit' }
-    if (-not $target) { $target = $AE::FocusedElement }
+    if (-not $target -and $focused) { $target = $AE::FocusedElement }
+    if (-not $target) {
+      # The window's text field, when it has exactly one obvious one (a document, an editor).
+      $edits = $root.FindAll($TS::Descendants, (New-Object System.Windows.Automation.OrCondition (New-Object System.Windows.Automation.PropertyCondition ($AE::ControlTypeProperty), $CT::Edit), (New-Object System.Windows.Automation.PropertyCondition ($AE::ControlTypeProperty), $CT::Document)))
+      if ($edits.Count -ge 1) { $target = $edits[0] }
+    }
     if ($target -and $target.Current.IsPassword) { throw 'That is a password field; Jarvis never types into password fields.' }
+    if (-not $focused) {
+      # Windows kept another window in front: put the text in through UI Automation instead of keys.
+      $vp = $null
+      if ($target -and -not $a.submit -and $target.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$vp) -and -not $vp.Current.IsReadOnly) {
+        $vp.SetValue([string]$vp.Current.Value + [string]$a.text)
+        return [pscustomobject]@{ verified = $vp.Current.Value.Contains([string]$a.text); via = 'value' }
+      }
+      throw "Windows kept another window in front of $($a.name), so nothing was typed. Click $($a.name) once and ask again."
+    }
     if ($target -and $a.field) { try { $target.SetFocus() } catch { } }
     $front = Get-Front
     if (-not $front -or $front.pid -ne $w.pid) { throw "$($a.name) is no longer in front, so nothing was typed." }
@@ -320,7 +357,7 @@ $handlers = @{
   }
   'keys' = { param($a)
     $w = Require-Window ([string]$a.name)
-    if (-not (Focus-Window $w)) { throw "$($a.name) could not be brought to the front, so no keys were pressed." }
+    if (-not (Focus-Window $w)) { throw "Windows kept another window in front of $($a.name), so no keys were pressed. Click $($a.name) once and ask again." }
     [System.Windows.Forms.SendKeys]::SendWait((Convert-Keys ([string]$a.keys)))
     'pressed'
   }
@@ -389,7 +426,8 @@ while ($true) {
     $id = $req.id
     $h = $handlers[[string]$req.op]
     if (-not $h) { throw "unknown operation $($req.op)" }
-    $result = & $h $req.args
+    $items = @(& $h $req.args)
+    $result = if ($items.Count -eq 0) { $null } elseif ($items.Count -eq 1) { $items[0] } else { $items }
     $out = @{ id = $id; ok = $true; result = $result }
   } catch {
     $out = @{ id = $id; ok = $false; error = $_.Exception.Message }

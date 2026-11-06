@@ -24,6 +24,10 @@ npm install
 npm start
 ```
 
+On Linux x64, `onnxruntime-node` downloads its CUDA provider (≈300 MB) during install if it
+finds CUDA; Jarvis runs the voice on the CPU and never loads it —
+`npm install --onnxruntime-node-install-cuda=skip` avoids the download (packages leave it out).
+
 `npm start` is the original browser experience (bridge + Vite face). For the always-on assistant
 use `jarvis setup` and `jarvis install` (macOS: `macos/jarvisctl install`). While developing the
 Windows/Linux client you can run it in the foreground — stop the service first (`jarvis stop`):

@@ -93,7 +93,8 @@ for (const dir of keep) {
   cpSync(dir, to, { recursive: true, filter: (src) => src === dir || !src.slice(dir.length).includes(`${process.platform === 'win32' ? '\\' : '/'}node_modules`) })
 }
 // 3b. Inside those packages, drop what this platform never loads (checked, not guessed):
-//   - onnxruntime-node ships every OS's binary; only bin/napi-v*/<this os>/<this arch> is loaded;
+//   - onnxruntime-node ships every OS's binary; only bin/napi-v*/<this os>/<this arch> is loaded,
+//     and on the CPU (no GPU execution providers);
 //   - onnxruntime-web and transformers' .wasm are the browser runtime — the Node build of
 //     @huggingface/transformers imports onnxruntime-node instead (asserted below);
 //   - source maps.
@@ -103,7 +104,18 @@ if (existsSync(ortBin)) {
   for (const napi of readdirSync(ortBin)) {
     for (const plat of readdirSync(join(ortBin, napi))) {
       if (plat !== process.platform) rmSync(join(ortBin, napi, plat), { recursive: true, force: true })
-      else for (const a of readdirSync(join(ortBin, napi, plat))) if (a !== process.arch) rmSync(join(ortBin, napi, plat, a), { recursive: true, force: true })
+      else {
+        for (const a of readdirSync(join(ortBin, napi, plat))) {
+          const dir = join(ortBin, napi, plat, a)
+          if (a !== process.arch) {
+            rmSync(dir, { recursive: true, force: true })
+            continue
+          }
+          // GPU execution providers (CUDA, TensorRT…) that onnxruntime-node's installer downloads on
+          // Linux x64: the voice engine runs on the CPU and never loads them.
+          for (const f of readdirSync(dir)) if (/providers_(cuda|tensorrt|rocm|migraphx|openvino|dnnl)/i.test(f)) rmSync(join(dir, f), { force: true })
+        }
+      }
     }
   }
 }

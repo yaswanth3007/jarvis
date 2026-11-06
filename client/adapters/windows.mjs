@@ -107,6 +107,20 @@ export class PsHost {
   }
 }
 
+/** The Start menu's apps (Get-StartApps), or the Start menu shortcuts where that is unavailable. */
+async function listStartApps() {
+  const ps = findOnPath('powershell') ?? 'powershell.exe'
+  const command = "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false; " +
+    "$a = @(); try { $a = @(Get-StartApps | ForEach-Object { [pscustomobject]@{ name = $_.Name; id = $_.AppID } }) } catch { }; " +
+    "if ($a.Count -eq 0) { foreach ($d in @(\"$env:ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\", \"$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\")) { " +
+    "if (Test-Path $d) { Get-ChildItem -Path $d -Recurse -Filter *.lnk | ForEach-Object { $a += [pscustomobject]@{ name = $_.BaseName; id = 'lnk:' + $_.FullName } } } } }; " +
+    'ConvertTo-Json -InputObject @($a) -Compress -Depth 3'
+  const r = await run(ps, ['-NoProfile', '-NonInteractive', '-Command', command], { timeout: 120_000 })
+  if (r.code !== 0) throw new Error(`the Start menu could not be listed (${r.stderr.trim().slice(0, 200) || r.code})`)
+  const list = JSON.parse(r.stdout.trim() || '[]')
+  return Array.isArray(list) ? list : [list]
+}
+
 const BROWSERS = { chrome: 'chrome', 'google chrome': 'chrome', edge: 'msedge', 'microsoft edge': 'msedge', firefox: 'firefox', brave: 'brave', opera: 'opera' }
 const EDITORS = { 'vs code': 'code', vscode: 'code', 'visual studio code': 'code', code: 'code', notepad: 'notepad.exe', 'notepad++': 'notepad++' }
 
@@ -134,8 +148,9 @@ export class WindowsAdapter {
    * answered at once and refreshed in the background when it is more than a minute old.
    */
   async installedApps(refresh = false) {
+    // Listed by a separate, short-lived PowerShell so the desktop helper is never busy with it.
     const load = () => {
-      this.appsLoading ??= this.ui.call('apps', {}, 90_000).then((list) => {
+      this.appsLoading ??= listStartApps().then((list) => {
         this.apps = (Array.isArray(list) ? list : [list]).filter((a) => a?.name && a?.id)
         this.appsAt = Date.now()
         return this.apps
@@ -164,7 +179,8 @@ export class WindowsAdapter {
   }
 
   async find(name) {
-    return this.ui.call('find', { name })
+    const w = await this.ui.call('find', { name })
+    return w && typeof w === 'object' && w.pid != null ? w : null
   }
 
   async openApp(name) {
@@ -215,7 +231,8 @@ export class WindowsAdapter {
 
   async typeText(name, text, { field, submit } = {}) {
     const r = await this.ui.call('type', { name, text, field, submit: Boolean(submit) }, 45_000)
-    return r?.verified === false ? 'typed, but the field does not show the text — it may not have gone in' : 'typed'
+    if (r?.verified === false) return 'typed, but the field does not show the text — it may not have gone in'
+    return r?.via === 'value' ? 'typed (into the field directly: Windows kept another window in front)' : 'typed'
   }
 
   async pressKeys(name, keys) {

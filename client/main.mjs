@@ -457,7 +457,8 @@ async function takeConnection() {
 async function contextLine() {
   const parts = []
   try {
-    const front = await adapter.frontmost()
+    // Never let a slow desktop delay the request: the context is a nicety.
+    const front = await Promise.race([adapter.frontmost(), new Promise((r) => setTimeout(() => r(null), 1500))])
     if (front) parts.push(`frontmost app is ${plain(front.name, 60)}${front.title ? ` (window “${plain(front.title, 80)}”)` : ''}`)
   } catch {
     /* unknown */

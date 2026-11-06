@@ -28,7 +28,8 @@ plus `SHA256SUMS-<os>-<arch>.txt`.
    (Windows, Linux) and `@picovoice/pvrecorder-node` (Windows). Packages only needed to build
    the face (React, Three.js, MediaPipe…) are left out.
 4. Inside those, what this platform never loads is removed: the other operating systems'
-   onnxruntime binaries, the browser-only WebAssembly runtime (the Node build of
+   onnxruntime binaries and its GPU execution providers (the voice engine runs on the CPU), the
+   browser-only WebAssembly runtime (the Node build of
    `@huggingface/transformers` imports `onnxruntime-node`; the packager checks this), and source maps.
 
 The largest single item is the Claude Code binary that the Agent SDK runs (≈260 MB unpacked), which
@@ -38,6 +39,24 @@ cannot be left out. Node.js itself is a prerequisite and is not bundled; the spe
 `packaging/ci/smoke-package.mjs <staged folder>` runs the packaged build — its CLI, its bridge
 (which must prove itself), its built face and (Windows/Linux) its voice assistant — to show the
 package is complete.
+
+## Dependencies, classified
+
+| Dependency | Licence | Where it is used | Class |
+|---|---|---|---|
+| `@anthropic-ai/claude-agent-sdk` (+ its per-platform Claude Code binary) | Anthropic terms | the bridge, every OS | shared, runtime; native binary per OS/arch |
+| `zod`, `ws` | MIT | bridge, client, CLI | shared, runtime |
+| `kokoro-js` → `@huggingface/transformers` → `onnxruntime-node`, `sharp` | Apache-2.0 / MIT | the voice engine, every OS | shared, runtime; native binaries per OS/arch |
+| `sherpa-onnx-node` (+ `sherpa-onnx-<os>-<arch>`) | Apache-2.0 | wake word, VAD, speech-to-text | Windows and Linux only (optional dependency; not packaged on macOS) |
+| `@picovoice/pvrecorder-node` | Apache-2.0 | microphone (WASAPI) | Windows only (optional dependency; packaged on Windows only) |
+| React, Three.js, `@react-three/*`, framer-motion, MediaPipe, Porcupine web, DOMPurify, zustand, `@anthropic-ai/sdk` | MIT / Apache-2.0 | the web face, bundled into `dist/` by Vite | build-time for packages (not shipped) |
+| Vite, TypeScript, oxlint, tsx, `@types/*` | MIT / Apache-2.0 | development | dev only |
+| Speech models (sherpa-onnx GigaSpeech KWS, Silero VAD, Moonshine tiny) | Apache-2.0 / MIT | Windows, Linux | downloaded on first run, SHA-256 pinned |
+| Kokoro-82M voice (q8) | Apache-2.0 | every OS | downloaded on first run (Hugging Face) |
+| OS tools: PowerShell 5.1 / .NET (Windows); `parec`/`pw-record`/`arecord`, `paplay`/`pw-play`/`aplay`, python3-gi + AT-SPI, `wmctrl`, `xdotool`, `wtype`, `grim`/`scrot`…, `espeak-ng` (Linux) | the OS's | adapters | system, detected at run time; optional ones reported by `jarvis doctor` |
+
+No paid service is required beyond the user's existing Claude Code subscription; ElevenLabs
+remains an optional add-on of the web face.
 
 ## CI
 

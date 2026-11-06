@@ -74,7 +74,8 @@ jobs:
           key: kokoro-q8-${{ runner.os }}-v1
 
       - name: Download and verify the speech models
-        run: node -e "import('./core/models.mjs').then(m => m.ensureModels({ root: process.env.JARVIS_TEST_MODELS })).then(s => { console.log(JSON.stringify({kws: s.kws, vad: s.vad, asr: s.asr})); if (!s.all) process.exit(1) })"
+        run: |
+          node -e "import('./core/models.mjs').then(m => m.ensureModels({ root: process.env.JARVIS_TEST_MODELS })).then(s => { console.log(JSON.stringify({kws: s.kws, vad: s.vad, asr: s.asr})); if (!s.all) process.exit(1) })"
 
       - name: Capabilities of this runner
         run: node bin/jarvis.mjs capabilities
